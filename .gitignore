@@ -1,0 +1,45 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- uv ---
+# uv.lock SHOULD be committed (it's like package-lock.json) — do not ignore it
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Type checking / linting caches ---
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+
+# --- Project-specific: scraped/generated data ---
+# Raw scraped posts and extracted datasets are regenerable from the
+# pipeline, and the raw dump could get large — don't commit it.
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# --- Logs / eval output ---
+*.log
+eval_failures.json
