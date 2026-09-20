@@ -1,0 +1,33 @@
+[project]
+name = "cryptic-agent"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "ipeksahbazoglu", email = "ipeksahbazoglu@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.125.0",
+    "beautifulsoup4>=4.15.0",
+    "markdownify>=1.2.3",
+    "nltk>=3.9.2",
+    "pydantic>=2.13.5",
+    "python-dotenv>=1.2.1",
+    "requests>=2.32.5",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+cryptic-agent = "cryptic_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "ruff>=0.16.8",
+]
