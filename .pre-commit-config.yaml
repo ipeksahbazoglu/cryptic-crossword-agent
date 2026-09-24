@@ -30,7 +30,7 @@ repos:
         types: [python]
       - id: mypy
         name: mypy
-        entry: .venv/bin/mypy src
+        entry: .venv/bin/mypy src tests
         language: system
         types: [python]
         pass_filenames: false
