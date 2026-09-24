@@ -19,6 +19,7 @@ uv run mypy src tests                # strict mode
 uv run pytest                    # no tests exist yet
 uv run pytest path/to/test_x.py::test_name   # single test
 uv run python -c "import nltk; nltk.download('words')"   # required before using the anagram/word tools
+# macOS CERTIFICATE_VERIFY_FAILED on that download? Prefix with: SSL_CERT_FILE=$(uv run python -m certifi)
 ```
 
 `pre-commit` is a dev dependency, but there is no `.pre-commit-config.yaml` yet. Commit `uv.lock`.
