@@ -1,7 +1,7 @@
 [project]
 name = "cryptic-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A tool-using LLM agent for solving UK cryptic crossword clues"
 authors = [
     { name = "ipeksahbazoglu", email = "ipeksahbazoglu@gmail.com" }
 ]
@@ -31,3 +31,21 @@ dev = [
     "pytest>=8.4.2",
     "ruff>=0.16.8",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+# E/F = pyflakes+pycodestyle core, I = import sorting, UP = pyupgrade,
+# B = bugbear (common bug patterns), SIM = simplify, N = naming conventions
+
+[tool.ruff.format]
+quote-style = "double"
+
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
