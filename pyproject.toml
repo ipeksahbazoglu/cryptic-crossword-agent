@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cryptic-agent = "cryptic_agent:main"
+cryptic-agent = "cryptic_agent.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A RAG/tool-use agent for solving UK cryptic crossword clues, trained on explanations scraped from Fifteensquared. This repo (`cryptic-agent/`) is the uv-packaged project and is currently a skeleton: `src/cryptic_agent/__init__.py` only defines a placeholder `main()`.
+A RAG/tool-use agent for solving UK cryptic crossword clues, trained on explanations scraped from Fifteensquared. This repo (`cryptic-agent/`) is the uv-packaged project, being built up step by step. `config.py` holds settings (model, data paths, API key); `cli.py` has one subcommand per pipeline stage, and handlers are stubs until each stage is ported.
 
 The working pipeline code lives in the sibling directory `../cryptic-agent-code/`. That directory is not under git and is not packaged: it is a set of standalone scripts with a `requirements.txt`. When porting its code into `src/cryptic_agent/`, it has to meet this repo's stricter tooling (strict mypy, ruff rules below, Python 3.13).
 
@@ -12,10 +12,10 @@ The working pipeline code lives in the sibling directory `../cryptic-agent-code/
 
 ```bash
 uv sync                          # install deps + dev group into .venv
-uv run cryptic-agent             # entry point -> cryptic_agent:main
+uv run cryptic-agent --help      # CLI: scrape|extract|solve|eval (cryptic_agent.cli:main)
 uv run ruff check .              # lint (E, F, I, UP, B, SIM, N; line length 100)
 uv run ruff format .             # format (double quotes)
-uv run mypy src                  # strict mode
+uv run mypy src tests                # strict mode
 uv run pytest                    # no tests exist yet
 uv run pytest path/to/test_x.py::test_name   # single test
 uv run python -c "import nltk; nltk.download('words')"   # required before using the anagram/word tools
