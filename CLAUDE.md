@@ -4,41 +4,43 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A RAG/tool-use agent for solving UK cryptic crossword clues, trained on explanations scraped from Fifteensquared. This repo (`cryptic-agent/`) is the uv-packaged project, being built up step by step. `config.py` holds settings (model, data paths, API key); `cli.py` has one subcommand per pipeline stage, and handlers are stubs until each stage is ported.
+An agent that solves UK cryptic crossword clues by searching a store of real, already-explained clues scraped from Fifteensquared, then verifying candidate answers mechanically. The owner is building it to learn LLM engineering, CI/CD and git practice. Claude writes the code; the owner makes the design decisions and reviews and merges the PRs.
 
-The working pipeline code lives in the sibling directory `../cryptic-agent-code/`. That directory is not under git and is not packaged: it is a set of standalone scripts with a `requirements.txt`. When porting its code into `src/cryptic_agent/`, it has to meet this repo's stricter tooling (strict mypy, ruff rules below, Python 3.13).
+The design comes from `../CLAUDE_CODE_HANDOFF.md`. Its "Repo state" section is out of date; this file and the code are current. `../cryptic-agent-code/` is an earlier proof of concept built on a flat schema. It is superseded, so use it only as a reference, never as a template.
 
-## Commands (this repo)
+## Commands
 
 ```bash
-uv sync                          # install deps + dev group into .venv
-uv run cryptic-agent --help      # CLI: scrape|extract|solve|eval (cryptic_agent.cli:main)
-uv run ruff check .              # lint (E, F, I, UP, B, SIM, N; line length 100)
-uv run ruff format .             # format (double quotes)
-uv run mypy src tests                # strict mode
-uv run pytest                    # no tests exist yet
-uv run pytest path/to/test_x.py::test_name   # single test
-uv run python -c "import nltk; nltk.download('words')"   # required before using the anagram/word tools
+uv sync                                        # install deps + dev group into .venv
+uv run cryptic-agent --help                    # CLI: scrape|extract|solve|eval
+uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
+uv run ruff check . && uv run ruff format --check .
+uv run mypy src tests                          # strict, with the pydantic plugin
+uv run pytest                                  # tests never hit the network or an LLM
+uv run pytest tests/test_models.py::test_hidden_word   # single test
+uv run pre-commit run --all-files              # hooks call .venv/bin tools, so run `uv sync` first
+uv run python -c "import nltk; nltk.download('words')"   # word list for tools/ (integration tests skip without it)
 # macOS CERTIFICATE_VERIFY_FAILED on that download? Prefix with: SSL_CERT_FILE=$(uv run python -m certifi)
 ```
 
-`pre-commit` is a dev dependency, but there is no `.pre-commit-config.yaml` yet. Commit `uv.lock`.
+CI (`.github/workflows/ci.yml`) runs `uv sync --locked`, ruff, `mypy src tests`, downloads the NLTK corpus, and runs pytest. The `ci-gate` ruleset protects `main` only: CI must pass, and force pushes and deletions are blocked. Commits follow Conventional Commits. For stacked PRs, merge the lower PR, retarget the next one to `main`, and only then delete the merged branch; deleting it first makes GitHub close the dependent PR.
 
-## Pipeline architecture (from `../cryptic-agent-code/`)
+## Architecture
 
-The pipeline has four stages. Each stage reads the previous stage's files from `data/`, which is gitignored and can be regenerated:
+The pipeline is **scrape → extract → store/index → solve → eval**. Each stage reads the previous stage's output from `data/` (gitignored; override with `CRYPTIC_AGENT_DATA_DIR`).
 
-1. **scraper/fetch_posts.py** calls the Fifteensquared WordPress REST API (`/wp-json/wp/v2/posts`), not rendered HTML. It first resolves a category slug to an ID. For nested slugs like `guardian/quick-cryptic`, it uses only the last segment. It converts HTML to markdown with bold/italic/underline kept, because these marks carry meaning (bold/underline usually marks the definition, italics the indicator). It rate-limits to 1 request/sec and writes `data/raw/<category>.jsonl`.
-2. **extraction/extract_clues.py** calls Claude once per post and forces the `record_clues` tool, whose schema comes from the pydantic `ClueRecord` in `extraction/schema.py`. The output is re-validated against pydantic and written to `data/processed/clues.jsonl`. By design, the prompt skips unclear clues rather than guessing: a bad extraction silently corrupts the few-shot/eval data.
-3. **agent/solver.py** runs a manual Claude tool-use loop (at most 8 turns) with the tools in `agent/tools.py`. `TOOL_DEFINITIONS` (JSON schemas) and `TOOL_IMPLEMENTATIONS` (name → function) must stay in sync. Few-shot examples are sampled at random from `clues.jsonl`. This project uses in-context examples, not fine-tuning.
-4. **eval/evaluate.py** shuffles the dataset with a seed and splits it into a test set and a separate few-shot pool that never overlaps it. It reports exact-match accuracy overall and per `wordplay_type`, and writes `eval_failures.json` next to the dataset.
+- **`models.py`: the domain schema that every stage shares.** A `Clue` holds `definitions: list[Definition]` and `wordplay: list[WordplayComponent]`, and each component has an indicator and fodder. Validators encode clue anatomy:
+  - a definition sits at the start or end of the clue, or covers the `whole` clue
+  - indicator and fodder text are whole words that appear in the clue
+  - a double definition has 2+ definitions and no wordplay
+  - the answer length matches the enumeration
 
-Key design points:
-- **Extraction and solving are deliberately separate LLM calls.** Extraction aims to be faithful to the source; solving aims to reason well. Don't merge them into one prompt.
-- **The solver has to verify answers with tools rather than trust what it generates.** The tools are: dictionary-checked anagrams and hidden words using the NLTK `words` corpus, synonyms from the free Datamuse API, word validity, and reversal.
-- **The solver's output format is load-bearing.** The system prompt requires a last line of the form `ANSWER: <word> | TYPE: ... | REASONING: ...`. The eval parses it with `ANSWER:\s*([A-Za-z]+)`, so a change to one needs a matching change to the other.
-- `WordplayType` in `schema.py` is the shared taxonomy. The extraction prompt, the solver prompt, and the eval's per-type breakdown all depend on it.
-- `agent/tools.py` loads the NLTK corpus at import time and raises `SystemExit` if the corpus is missing.
-- The scripts use flat sibling imports (`from schema import ...`, `from tools import ...`), and `evaluate.py` adds `agent/` to `sys.path` by hand. Both will need changing when the code moves into the package.
-- The model is set as `MODEL = "claude-sonnet-5"` separately in `extract_clues.py` and `solver.py`.
-- `ANTHROPIC_API_KEY` is read from the environment or from `.env` via python-dotenv (see `.env.example`).
+  `Clue.category` is computed from this structure, not stored. `double_definition`, `cryptic_definition`, `and_lit` and `compound` are clue shapes, not `ComponentType`s. `normalize_answer`, `normalize_phrase` and `enumeration_lengths` are the shared text helpers.
+- **`jsonl.py`:** typed `read_jsonl(path, Model)` with `file:line` errors, an atomic `write_jsonl`, and `append_jsonl` for resumable jobs.
+- **`scraper/`:** `client.py` is a WordPress REST client that limits itself to 1 request/s (with an injectable clock and sleep), sends a User-Agent, and retries 429/5xx via urllib3 `Retry`. `clean.py` is pure HTML→`RawPost` conversion. `scrape.py` merges posts into the existing file by ID. **Bloggers mark clue parts with formatting.** For example, the Quick Cryptic legend says "the definition is in bold and underlined, the indicator is in red". `clean.py` keeps that formatting as `**bold**`, `<u>…</u>` and `<color=red>…</color>`, which plain markdownify would drop. It records formatting, not meaning: extraction reads each blogger's own legend.
+- **`tools/`:** the verification tools. `Dictionary` gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
+- **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code. `extract`, `solve` and `eval` are still stubs.
+
+**Solver design, decided but not yet built:** agentic retrieval. The LLM gets the clue plus tools. Some tools search the clue store: similar definitions and the answers they led to, what an indicator signalled in past clues, how an answer has been clued before. The rest are the verification tools. The model segments the clue in its own reasoning and decides what to look up. An answer is accepted only once a verification tool confirms it, and the answer cites the historical clues it used.
+
+**LLM provider: Groq free tier** (`GROQ_API_KEY` in `.env`). `config.py` and `.env.example` still use Anthropic placeholders until the LLM client is built. Groq has no embeddings API, so retrieval uses a local embedding model. Free-tier rate limits mean LLM jobs need client-side throttling, backoff on 429, and resumable runs. Check which models are available via Groq's `/models` endpoint rather than assuming.
