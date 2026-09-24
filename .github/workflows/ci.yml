@@ -36,5 +36,9 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
+      # Word list for the tools' integration tests (they skip without it).
+      - name: Download NLTK corpus
+        run: uv run python -c "import nltk; assert nltk.download('words', quiet=True)"
+
       - name: Test
         run: uv run pytest
