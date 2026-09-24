@@ -5,6 +5,7 @@ return a process exit code; stage logic lives in its own module, not here.
 """
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -12,6 +13,8 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
+from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
+from cryptic_agent.scraper.scrape import output_path, scrape_category
 
 Handler = Callable[[argparse.Namespace], int]
 
@@ -19,6 +22,22 @@ Handler = Callable[[argparse.Namespace], int]
 def _not_implemented(args: argparse.Namespace) -> int:
     print(f"'{args.command}' is not implemented yet.", file=sys.stderr)
     return 1
+
+
+def _scrape(args: argparse.Namespace) -> int:
+    out_path = args.output or output_path(config.raw_dir(), args.category)
+    try:
+        summary = scrape_category(
+            WordPressClient(), args.category, max_pages=args.pages, out_path=out_path
+        )
+    except CategoryNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"Fetched {summary.fetched} posts ({summary.new} new). "
+        f"{summary.total} posts in {summary.path}"
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,10 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     scrape = subparsers.add_parser("scrape", help="Fetch Fifteensquared blog posts.")
-    scrape.add_argument("--category", required=True, help="Category slug, e.g. 'guardian'.")
-    scrape.add_argument("--pages", type=int, default=5, help="Number of pages to fetch.")
-    scrape.add_argument("--per-page", type=int, default=20, help="Posts per page.")
-    scrape.set_defaults(handler=_not_implemented)
+    scrape.add_argument(
+        "--category", required=True, help="Category slug, e.g. 'guardian/quick-cryptic'."
+    )
+    scrape.add_argument(
+        "--pages", type=int, default=1, help=f"Pages to fetch, newest first ({MAX_PER_PAGE} each)."
+    )
+    scrape.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
+    scrape.set_defaults(handler=_scrape)
 
     extract = subparsers.add_parser("extract", help="Turn raw posts into structured clues.")
     extract.add_argument("--input", type=Path, default=None, help="Raw posts directory.")
@@ -59,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI. `argv` defaults to sys.argv[1:]; tests pass it explicitly."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv(find_dotenv(usecwd=True))  # .env from where you run the command
     args = build_parser().parse_args(argv)
     handler: Handler = args.handler
