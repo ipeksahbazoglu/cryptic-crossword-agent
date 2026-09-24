@@ -1,7 +1,7 @@
 [project]
 name = "cryptic-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A tool-using LLM agent for solving UK cryptic crossword clues"
 authors = [
     { name = "ipeksahbazoglu", email = "ipeksahbazoglu@gmail.com" }
 ]
