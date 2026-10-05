@@ -33,6 +33,11 @@ def processed_dir() -> Path:
     return data_dir() / "processed"
 
 
+def lexicon_dir() -> Path:
+    """Downloaded reference data (word lists, thesauri), see lexicon/sources.py."""
+    return data_dir() / "lexicon"
+
+
 def get_api_key() -> str:
     """Return the Anthropic API key, failing with a clear message if it is missing.
 

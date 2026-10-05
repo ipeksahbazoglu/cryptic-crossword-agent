@@ -39,6 +39,8 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+# Downloaded third-party data: never commit it (licences restrict redistribution).
+data/lexicon/
 
 # --- Logs / eval output ---
 *.log

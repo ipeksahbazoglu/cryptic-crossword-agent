@@ -12,6 +12,7 @@ on). "Senator arranged crime (7)" -> TREASON: definition "crime", indicator
 """
 
 import re
+import unicodedata
 from datetime import date, datetime
 from typing import Literal, Self
 
@@ -47,9 +48,24 @@ def enumeration_lengths(enumeration: str) -> list[int]:
     return [int(part) for part in re.split(r"[,-]", enumeration)]
 
 
+# Letters NFKD does not split into base letter + accent mark.
+_UNDECOMPOSABLE = str.maketrans(
+    {"æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ß": "ss", "ł": "l", "Ł": "L"}
+)
+
+
+def strip_accents(text: str) -> str:
+    """Plain letters: 'précis' -> 'precis', 'Rösti' -> 'Rosti', 'Ærø' -> 'AEro'.
+
+    NFKD splits 'é' into 'e' plus a combining accent mark, which is then dropped.
+    """
+    decomposed = unicodedata.normalize("NFKD", text.translate(_UNDECOMPOSABLE))
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def normalize_answer(answer: str) -> str:
-    """Uppercase letters only: 'ice-cream' -> 'ICECREAM'."""
-    return re.sub(r"[^A-Z]", "", answer.upper())
+    """Uppercase letters only: 'ice-cream' -> 'ICECREAM', 'précis' -> 'PRECIS'."""
+    return re.sub(r"[^A-Z]", "", strip_accents(answer).upper())
 
 
 def normalize_phrase(text: str) -> str:
@@ -58,7 +74,7 @@ def normalize_phrase(text: str) -> str:
     Used to compare clue fragments while ignoring case and punctuation. Apostrophes
     are dropped rather than split on, so "setter's" stays one word.
     """
-    text = text.lower().replace("'", "").replace("’", "")
+    text = strip_accents(text).lower().replace("'", "").replace("’", "")
     return " ".join(re.findall(r"[a-z0-9]+", text))
 
 

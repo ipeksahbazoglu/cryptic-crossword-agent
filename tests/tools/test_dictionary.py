@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
@@ -30,13 +32,22 @@ def test_anagrams_returns_a_copy() -> None:
     assert dictionary.anagrams("cat") == ["ACT", "CAT"]
 
 
-def test_missing_nltk_corpus_gives_actionable_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nltk.corpus import words
+def test_from_ukacd_loads_entries_and_phrase_words(fake_ukacd_zip: Path) -> None:
+    dictionary = Dictionary.from_ukacd(fake_ukacd_zip)
 
-    def missing() -> list[str]:
-        raise LookupError("Resource 'words' not found.")
+    assert "Verdi" in dictionary
+    assert "NOSWEAT" in dictionary  # the whole phrase, for a (2,5) answer
+    assert "SWEAT" in dictionary  # and each word, for word-by-word checks
+    assert "AARONSROD" in dictionary
 
-    monkeypatch.setattr(words, "words", missing)
 
-    with pytest.raises(DictionaryNotFoundError, match=r"nltk\.download\('words'\)"):
-        Dictionary.from_nltk()
+def test_from_ukacd_never_guesses_lost_accents(fake_ukacd_zip: Path) -> None:
+    dictionary = Dictionary.from_ukacd(fake_ukacd_zip)
+
+    assert "PRCIS" not in dictionary
+    assert "PRECIS" not in dictionary  # not until another source attests it
+
+
+def test_missing_word_list_says_how_to_get_it(tmp_path: Path) -> None:
+    with pytest.raises(DictionaryNotFoundError, match="cryptic-agent ingest"):
+        Dictionary.from_ukacd(tmp_path / "nothing-here.zip")
