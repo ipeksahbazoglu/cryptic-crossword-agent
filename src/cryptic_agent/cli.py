@@ -13,6 +13,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
+from cryptic_agent.lexicon.sources import SOURCES, ChecksumMismatchError, fetch
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
 
@@ -40,6 +41,19 @@ def _scrape(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ingest(args: argparse.Namespace) -> int:
+    sources_dir = config.lexicon_dir() / "sources"
+    for name in args.source or list(SOURCES):
+        source = SOURCES[name]
+        try:
+            path = fetch(source, sources_dir)
+        except ChecksumMismatchError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"{source.name}: {path}\n  licence: {source.licence}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
@@ -56,6 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scrape.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
     scrape.set_defaults(handler=_scrape)
+
+    ingest = subparsers.add_parser("ingest", help="Download reference data (word lists etc.).")
+    ingest.add_argument(
+        "--source",
+        action="append",
+        choices=sorted(SOURCES),
+        help="Only this source (repeatable). Default: all.",
+    )
+    ingest.set_defaults(handler=_ingest)
 
     extract = subparsers.add_parser("extract", help="Turn raw posts into structured clues.")
     extract.add_argument("--input", type=Path, default=None, help="Raw posts directory.")

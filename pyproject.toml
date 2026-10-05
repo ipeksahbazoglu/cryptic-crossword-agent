@@ -10,7 +10,6 @@ dependencies = [
     "anthropic>=0.125.0",
     "beautifulsoup4>=4.15.0",
     "markdownify>=1.2.3",
-    "nltk>=3.9.2",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.1",
     "requests>=2.32.5",

@@ -36,9 +36,10 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
-      # Word list for the tools' integration tests (they skip without it).
-      - name: Download NLTK corpus
-        run: uv run python -c "import nltk; assert nltk.download('words', quiet=True)"
+      # UKACD word list (800 KB, checksum-verified) for the integration tests,
+      # which skip without it.
+      - name: Download word list
+        run: uv run cryptic-agent ingest --source ukacd
 
       - name: Test
         run: uv run pytest

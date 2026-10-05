@@ -1,6 +1,6 @@
-"""Integration tests against the real NLTK word list.
+"""Integration tests against the real UKACD word list.
 
-Skipped when the corpus is not downloaded; CI downloads it so these always run there.
+Skipped until `cryptic-agent ingest` has run; CI runs it so these always run there.
 """
 
 import pytest
@@ -10,26 +10,31 @@ from cryptic_agent.tools.wordplay import check_answer, check_hidden_word, find_a
 
 
 @pytest.fixture(scope="module")
-def nltk_dictionary() -> Dictionary:
-    # scope="module": build the 234k-word index once for this file, not per test.
+def ukacd() -> Dictionary:
+    # scope="module": build the 250k-word index once for this file, not per test.
     try:
-        return Dictionary.from_nltk()
+        return Dictionary.from_ukacd()
     except DictionaryNotFoundError:
-        pytest.skip("NLTK 'words' corpus not installed")
+        pytest.skip("UKACD not downloaded; run: uv run cryptic-agent ingest")
 
 
-def test_senator_anagrams_to_treason(nltk_dictionary: Dictionary) -> None:
-    result = find_anagrams(nltk_dictionary, "SENATOR", length=7)
+def test_senator_anagrams_to_treason(ukacd: Dictionary) -> None:
+    result = find_anagrams(ukacd, "SENATOR", length=7)
 
     assert "TREASON" in result.matches
     assert "SENATOR" not in result.matches
 
 
-def test_hidden_word_in_real_clue_text(nltk_dictionary: Dictionary) -> None:
-    result = check_hidden_word(nltk_dictionary, "Some aroma nce", 7)
+def test_hidden_word_in_real_clue_text(ukacd: Dictionary) -> None:
+    result = check_hidden_word(ukacd, "Some aroma nce", 7)
 
     assert "ROMANCE" in [m.word for m in result.matches]
 
 
-def test_multi_word_answer_checked_word_by_word(nltk_dictionary: Dictionary) -> None:
-    assert check_answer(nltk_dictionary, "ICE CREAM", "3,5").valid
+def test_multi_word_answer_checked_word_by_word(ukacd: Dictionary) -> None:
+    assert check_answer(ukacd, "ICE CREAM", "3,5").valid
+
+
+@pytest.mark.parametrize("word", ["VERDI", "SERBIA", "OFFENCE", "EELS", "PERESTROIKA", "NOSWEAT"])
+def test_words_nltk_was_missing(ukacd: Dictionary, word: str) -> None:
+    assert word in ukacd

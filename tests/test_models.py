@@ -49,7 +49,15 @@ def test_enumeration_lengths(enumeration: str, expected: list[int]) -> None:
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("treason", "TREASON"), ("ice cream", "ICECREAM"), ("Jack-in-the-box", "JACKINTHEBOX")],
+    [
+        ("treason", "TREASON"),
+        ("ice cream", "ICECREAM"),
+        ("Jack-in-the-box", "JACKINTHEBOX"),
+        ("précis", "PRECIS"),  # accents become plain letters, not dropped
+        ("Rösti", "ROSTI"),
+        ("Ærø", "AERO"),  # letters Unicode can't decompose need a mapping
+        ("Straße", "STRASSE"),
+    ],
 )
 def test_normalize_answer(raw: str, expected: str) -> None:
     assert normalize_answer(raw) == expected
@@ -61,6 +69,7 @@ def test_normalize_answer(raw: str, expected: str) -> None:
         ("Senator, arranged!", "senator arranged"),
         ("  Setter's   ruse ", "setters ruse"),
         ("Setter’s ruse", "setters ruse"),
+        ("Café crème", "cafe creme"),  # accents kept as letters, not dropped
     ],
 )
 def test_normalize_phrase(raw: str, expected: str) -> None:
