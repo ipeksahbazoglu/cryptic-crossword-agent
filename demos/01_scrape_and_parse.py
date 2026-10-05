@@ -175,7 +175,7 @@ from cryptic_agent.tools.wordplay import (  # noqa: E402
 )
 
 try:
-    dictionary = Dictionary.from_ukacd()  # run `uv run cryptic-agent ingest` first
+    dictionary = Dictionary.load()  # UKACD + lexicon words; run `cryptic-agent ingest` first
 except DictionaryNotFoundError as exc:
     raise SystemExit(str(exc)) from exc
 print(f"dictionary: {len(dictionary):,} words")
@@ -230,18 +230,66 @@ for clue, fodder in with_fodder[:6]:
     print(f"{clue.clue_text!r:60} fodder {fodder!r:22} -> {clue.answer} {verdict}")
 
 # %% [markdown]
-# **Dictionary coverage.** How many answers does the UKACD word list accept?
-# (It was 81% with NLTK, the word list we started with.)
+# **Dictionary coverage.** How many answers does the dictionary accept? It is UKACD plus
+# well-attested past answers and repaired UKACD entries (81% with NLTK, where we started).
 # Multi-word answers are checked word by word, e.g. ICE CREAM (3,5).
 
 # %%
 checks = [check_answer(dictionary, c.answer, c.enumeration) for c in clues]
 accepted = sum(r.valid for r in checks)
-print(f"{accepted}/{len(checks)} answers accepted ({accepted / len(checks):.0%})")
+print(f"{accepted}/{len(checks)} answers accepted ({accepted / len(checks):.1%})")
 
 unknown = Counter(word for r in checks for word in r.unknown_words)
-print("\nwords UKACD doesn't know:", [w for w, _ in unknown.most_common(15)])
+print("\nwords still unknown:", [w for w, _ in unknown.most_common(15)])
+
+# %% [markdown]
+# ## 8. Memory: the lexicon
+# What an experienced solver "just knows", looked up in `data/lexicon/lexicon.sqlite`
+# (built by `cryptic-agent ingest` from 660k past clues, the Moby thesaurus and a curated
+# abbreviation list). Every answer comes with how many past clues back it.
+
+# %%
+from cryptic_agent.lexicon.store import Evidence, Lexicon  # noqa: E402
+
+lexicon = Lexicon()
+
+
+def evidence(items: list[Evidence], k: int = 6) -> str:
+    return ", ".join(f"{e.value} ({e.support}{'*' if e.curated else ''})" for e in items[:k])
+
+
 print(
-    "(words newer than UKACD's 2009 release, like SELFIE, and accented words whose accents\n"
-    " were lost in the only surviving copy, like PRECIS: other sources will fill these in)"
+    "definition 'Love god' (4)     ->", evidence(lexicon.definition_answers("Love god", length=4))
 )
+print(
+    "definition 'Prime Minister' (6)->",
+    evidence(lexicon.definition_answers("Prime Minister", length=6)),
+)
+print("thesaurus 'joyful' (7)         ->", lexicon.synonyms("joyful", length=7)[:8])
+print("abbreviation 'sailor'          ->", evidence(lexicon.abbreviations("sailor")))
+print("abbreviation 'one'             ->", evidence(lexicon.abbreviations("one")), " (* = curated)")
+print("indicator 'about'              ->", evidence(lexicon.indicator_types("about")))
+print("indicator 'cook'               ->", evidence(lexicon.indicator_types("cook")))
+
+# %% [markdown]
+# **How often does the definition alone lead to the answer?** For each Quick Cryptic clue
+# with one marked definition: is the answer among past answers for that definition, or
+# thesaurus terms, of the right length? And how many candidates would the solver face?
+
+# %%
+single = [c for c in clues if len(c.definitions) == 1]
+found, shortlist = 0, []
+for c in single:
+    length = len(c.answer)
+    candidates = {e.value for e in lexicon.definition_answers(c.definitions[0], length=length)}
+    candidates |= set(lexicon.synonyms(c.definitions[0], length=length))
+    if c.answer in candidates:
+        found += 1
+        shortlist.append(len(candidates))
+
+shortlist.sort()
+print(
+    f"{found}/{len(single)} clues ({found / len(single):.0%}): answer reachable from the definition"
+)
+print(f"candidates to choose from when it is: median {shortlist[len(shortlist) // 2]}")
+print("The wordplay check then picks between them; the rest is the LLM's job.")

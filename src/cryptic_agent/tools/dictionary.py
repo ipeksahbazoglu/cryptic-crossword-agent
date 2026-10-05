@@ -12,6 +12,7 @@ from pathlib import Path
 
 from cryptic_agent import config
 from cryptic_agent.lexicon.sources import UKACD
+from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
 from cryptic_agent.lexicon.wordlist import read_ukacd
 from cryptic_agent.models import normalize_answer
 
@@ -38,7 +39,9 @@ class Dictionary:
         self._by_letter_key = dict(by_key)
 
     @classmethod
-    def from_ukacd(cls, zip_path: Path | None = None) -> "Dictionary":
+    def from_ukacd(
+        cls, zip_path: Path | None = None, extra_words: Iterable[str] = ()
+    ) -> "Dictionary":
         """Load UKACD: every entry, plus each word of its phrases.
 
         'no sweat' is stored as NOSWEAT (a whole answer) and as NO and SWEAT, so
@@ -56,7 +59,24 @@ class Dictionary:
             len(ukacd.damaged),
         )
         phrase_words = (word for entry in ukacd.entries if " " in entry for word in entry.split())
-        return cls([*ukacd.entries, *phrase_words])
+        return cls([*ukacd.entries, *phrase_words, *extra_words])
+
+    @classmethod
+    def load(cls) -> "Dictionary":
+        """The full dictionary: UKACD plus the lexicon's extra words, if it has been built.
+
+        Extra words are past answers seen in 2+ clues (SELFIE, STAYCATION: newer than
+        UKACD) and UKACD entries whose lost accents another source confirmed (PRECIS).
+        """
+        try:
+            lexicon = Lexicon()
+        except LexiconNotFoundError:
+            logger.warning("lexicon not built: using UKACD alone (run cryptic-agent ingest)")
+            return cls.from_ukacd()
+        try:
+            return cls.from_ukacd(extra_words=lexicon.extra_words())
+        finally:
+            lexicon.close()
 
     def __contains__(self, word: object) -> bool:
         return isinstance(word, str) and normalize_answer(word) in self._words

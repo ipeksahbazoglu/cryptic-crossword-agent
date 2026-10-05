@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from cryptic_agent import cli, config
+from cryptic_agent.lexicon.sources import Source
 from cryptic_agent.scraper.client import CategoryNotFoundError, WordPressClient
 
 
@@ -111,3 +112,22 @@ def test_scrape_unknown_category_is_a_clean_error(
 
     assert cli.main(["scrape", "--category", "missing"]) == 2
     assert "no Fifteensquared category" in capsys.readouterr().err
+
+
+def test_ingest_without_big_sources_skips_the_lexicon_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_fetch(source: Source, dest_dir: Path) -> Path:
+        path = dest_dir / source.filename
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        return path
+
+    monkeypatch.setattr(cli, "fetch", fake_fetch)
+    monkeypatch.setenv(config.DATA_DIR_ENV_VAR, str(tmp_path / "data"))
+
+    assert cli.main(["ingest", "--source", "ukacd"]) == 0
+
+    out = capsys.readouterr().out
+    assert "ukacd:" in out
+    assert "lexicon not built" in out
