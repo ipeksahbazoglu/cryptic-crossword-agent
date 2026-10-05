@@ -175,7 +175,7 @@ from cryptic_agent.tools.wordplay import (  # noqa: E402
 )
 
 try:
-    dictionary = Dictionary.from_nltk()
+    dictionary = Dictionary.from_ukacd()  # run `uv run cryptic-agent ingest` first
 except DictionaryNotFoundError as exc:
     raise SystemExit(str(exc)) from exc
 print(f"dictionary: {len(dictionary):,} words")
@@ -230,7 +230,8 @@ for clue, fodder in with_fodder[:6]:
     print(f"{clue.clue_text!r:60} fodder {fodder!r:22} -> {clue.answer} {verdict}")
 
 # %% [markdown]
-# **Dictionary coverage.** How many answers does the NLTK word list accept?
+# **Dictionary coverage.** How many answers does the UKACD word list accept?
+# (It was 81% with NLTK, the word list we started with.)
 # Multi-word answers are checked word by word, e.g. ICE CREAM (3,5).
 
 # %%
@@ -239,8 +240,8 @@ accepted = sum(r.valid for r in checks)
 print(f"{accepted}/{len(checks)} answers accepted ({accepted / len(checks):.0%})")
 
 unknown = Counter(word for r in checks for word in r.unknown_words)
-print("\nmost common words NLTK doesn't know:", [w for w, _ in unknown.most_common(15)])
+print("\nwords UKACD doesn't know:", [w for w, _ in unknown.most_common(15)])
 print(
-    "(proper nouns like VERDI and SERBIA, British spellings like OFFENCE, and plurals or verb\n"
-    " forms like EELS and DWELLS: reasons to switch to a crossword word list later)"
+    "(words newer than UKACD's 2009 release, like SELFIE, and accented words whose accents\n"
+    " were lost in the only surviving copy, like PRECIS: other sources will fill these in)"
 )
