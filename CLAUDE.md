@@ -14,6 +14,7 @@ The design comes from `../CLAUDE_CODE_HANDOFF.md`. Its "Repo state" section is o
 uv sync                                        # install deps + dev group into .venv
 uv run cryptic-agent --help                    # CLI: scrape|extract|solve|eval
 uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
+uv sync --group demo && uv run python demos/01_scrape_and_parse.py   # walkthrough; or Run Cell in VS Code
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests                          # strict, with the pydantic plugin
 uv run pytest                                  # tests never hit the network or an LLM
