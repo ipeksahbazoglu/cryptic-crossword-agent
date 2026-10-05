@@ -20,11 +20,10 @@ uv run mypy src tests                          # strict, with the pydantic plugi
 uv run pytest                                  # tests never hit the network or an LLM
 uv run pytest tests/test_models.py::test_hidden_word   # single test
 uv run pre-commit run --all-files              # hooks call .venv/bin tools, so run `uv sync` first
-uv run python -c "import nltk; nltk.download('words')"   # word list for tools/ (integration tests skip without it)
-# macOS CERTIFICATE_VERIFY_FAILED on that download? Prefix with: SSL_CERT_FILE=$(uv run python -m certifi)
+uv run cryptic-agent ingest                    # download reference data to data/lexicon/ (checksum-verified)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `uv sync --locked`, ruff, `mypy src tests`, downloads the NLTK corpus, and runs pytest. The `ci-gate` ruleset protects `main` only: CI must pass, and force pushes and deletions are blocked. Commits follow Conventional Commits. For stacked PRs, merge the lower PR, retarget the next one to `main`, and only then delete the merged branch; deleting it first makes GitHub close the dependent PR.
+CI (`.github/workflows/ci.yml`) runs `uv sync --locked`, ruff, `mypy src tests`, runs `cryptic-agent ingest --source ukacd`, and runs pytest. The `ci-gate` ruleset protects `main` only: CI must pass, and force pushes and deletions are blocked. Commits follow Conventional Commits. For stacked PRs, merge the lower PR, retarget the next one to `main`, and only then delete the merged branch; deleting it first makes GitHub close the dependent PR.
 
 ## Architecture
 
@@ -39,7 +38,8 @@ The pipeline is **scrape → extract → store/index → solve → eval**. Each 
   `Clue.category` is computed from this structure, not stored. `double_definition`, `cryptic_definition`, `and_lit` and `compound` are clue shapes, not `ComponentType`s. `normalize_answer`, `normalize_phrase` and `enumeration_lengths` are the shared text helpers.
 - **`jsonl.py`:** typed `read_jsonl(path, Model)` with `file:line` errors, an atomic `write_jsonl`, and `append_jsonl` for resumable jobs.
 - **`scraper/`:** `client.py` is a WordPress REST client that limits itself to 1 request/s (with an injectable clock and sleep), sends a User-Agent, and retries 429/5xx via urllib3 `Retry`. `clean.py` is pure HTML→`RawPost` conversion. `scrape.py` merges posts into the existing file by ID. **Bloggers mark clue parts with formatting.** For example, the Quick Cryptic legend says "the definition is in bold and underlined, the indicator is in red". `clean.py` keeps that formatting as `**bold**`, `<u>…</u>` and `<color=red>…</color>`, which plain markdownify would drop. It records formatting, not meaning: extraction reads each blogger's own legend.
-- **`tools/`:** the verification tools. `Dictionary` gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
+- **`lexicon/`:** third-party reference data. `sources.py` pins each source to a URL and SHA-256 and downloads it to `data/lexicon/sources/` (never committed: the repo is public and some licences restrict redistributing derived data). `wordlist.py` reads UKACD, the crossword word list; about 1,300 of its entries lost their accents upstream ('pr\ufffdcis') and are set aside as `damaged`, to be restored only when another source attests a matching word, never guessed.
+- **`tools/`:** the verification tools. `Dictionary.from_ukacd()` gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
 - **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code. `extract`, `solve` and `eval` are still stubs.
 
 **Solver design, decided but not yet built:** agentic retrieval. The LLM gets the clue plus tools. Some tools search the clue store: similar definitions and the answers they led to, what an indicator signalled in past clues, how an answer has been clued before. The rest are the verification tools. The model segments the clue in its own reasoning and decides what to look up. An answer is accepted only once a verification tool confirms it, and the answer cites the historical clues it used.
