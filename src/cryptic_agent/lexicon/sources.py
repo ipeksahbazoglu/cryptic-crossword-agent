@@ -46,7 +46,28 @@ UKACD = Source(
     homepage="https://pypi.org/project/ccxxv/",
 )
 
-SOURCES: dict[str, Source] = {s.name: s for s in (UKACD,)}
+MOBY = Source(
+    name="moby",
+    url="https://www.gutenberg.org/files/3202/files/mthesaur.txt",
+    sha256="7c9742b1ed94435a893c0719b426725edb8a5242f8c526a75461bd6cee2dfd32",
+    filename="mthesaur.txt",
+    licence="Public domain (Grady Ward's Moby Thesaurus II, via Project Gutenberg)",
+    homepage="https://www.gutenberg.org/ebooks/3202",
+)
+
+CRYPTICS = Source(
+    name="cryptics",
+    url="https://cryptics.georgeho.org/data.db",
+    sha256="947f8992abb249533ce3ca0d73754f864a2ad8a08e31322777ec6e6aa483ede1",
+    filename="cryptics.db",
+    licence=(
+        "ODbL v1.0 (George Ho, cryptics.georgeho.org). Derived databases we publish "
+        "must also be ODbL, so the built lexicon is never committed"
+    ),
+    homepage="https://cryptics.georgeho.org/",
+)
+
+SOURCES: dict[str, Source] = {s.name: s for s in (UKACD, MOBY, CRYPTICS)}
 
 
 class ChecksumMismatchError(RuntimeError):

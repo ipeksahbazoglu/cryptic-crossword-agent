@@ -13,7 +13,9 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
-from cryptic_agent.lexicon.sources import SOURCES, ChecksumMismatchError, fetch
+from cryptic_agent.lexicon.build import build_lexicon
+from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMismatchError, fetch
+from cryptic_agent.lexicon.store import default_path as lexicon_path
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
 
@@ -51,6 +53,17 @@ def _ingest(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(f"{source.name}: {path}\n  licence: {source.licence}")
+
+    if all((sources_dir / s.filename).exists() for s in (MOBY, CRYPTICS)):
+        print("building the lexicon (about a minute)...")
+        summary = build_lexicon(sources_dir, lexicon_path())
+        print(f"lexicon: {summary.path}")
+        for table, count in summary.counts.items():
+            print(f"  {table:16s} {count:>10,}")
+    else:
+        print(
+            "lexicon not built: needs the moby and cryptics sources (run ingest without --source)"
+        )
     return 0
 
 

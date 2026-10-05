@@ -59,6 +59,10 @@ python_version = "3.13"
 strict = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
+# Name modules by path (tests.conftest vs tests.lexicon.conftest), with src/ as
+# the root for the package, so same-named test files don't collide.
+mypy_path = "src"
+explicit_package_bases = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
