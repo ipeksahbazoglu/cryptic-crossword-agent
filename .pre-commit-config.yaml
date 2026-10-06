@@ -13,6 +13,13 @@ repos:
         args: ["--maxkb=500"]
       - id: check-merge-conflict
 
+  # Clear notebook outputs before committing: keeps diffs readable and keeps
+  # scraped text and licensed data out of the public repo. Run locally to see them.
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+
   # ruff and mypy run from the project venv, i.e. the exact versions pinned in
   # uv.lock (same as CI). Calling .venv/bin directly, not `uv run`, keeps hooks
   # working from GUI git clients whose PATH lacks uv. Needs `uv sync` first.
@@ -22,12 +29,12 @@ repos:
         name: ruff check
         entry: .venv/bin/ruff check --fix
         language: system
-        types: [python]
+        types_or: [python, jupyter]
       - id: ruff-format
         name: ruff format
         entry: .venv/bin/ruff format
         language: system
-        types: [python]
+        types_or: [python, jupyter]
       - id: mypy
         name: mypy
         entry: .venv/bin/mypy src tests
