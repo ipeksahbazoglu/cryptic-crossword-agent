@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from cryptic_agent.agent.solver import Solver, SolveResult
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.agent.verify import Verdict
@@ -15,7 +17,7 @@ from cryptic_agent.evaluation.run import (
 )
 from cryptic_agent.extraction.table_parser import ParsedClue
 from cryptic_agent.lexicon.store import Lexicon
-from cryptic_agent.llm.client import ScriptedLLM, Usage
+from cryptic_agent.llm.client import RateLimitedError, ScriptedLLM, Usage
 from cryptic_agent.tools.dictionary import Dictionary
 
 
@@ -112,6 +114,35 @@ def test_run_resumes_without_redoing_clues(lexicon: Lexicon, tmp_path: Path) -> 
 
     assert len(FakeSolver.calls) == 5  # 3 then only the 2 new ones
     assert {r.key for r in rows} == {clue_key(c) for c in CLUES[:5]}
+
+
+class QuotaSolver(FakeSolver):
+    """Solves `budget` clues, then runs out of quota."""
+
+    budget = 0
+
+    def solve(self, clue: str, enumeration: str, *, pattern: str | None = None) -> SolveResult:
+        if QuotaSolver.budget == 0:
+            raise RateLimitedError("tokens per day (TPD)")
+        QuotaSolver.budget -= 1
+        return super().solve(clue, enumeration, pattern=pattern)
+
+
+def test_out_of_quota_stops_the_run_and_resume_continues(lexicon: Lexicon, tmp_path: Path) -> None:
+    FakeSolver.calls = []
+    out = tmp_path / "r.jsonl"
+    make = lambda tb: QuotaSolver(ScriptedLLM([]), tb)  # noqa: E731
+
+    QuotaSolver.budget = 2
+    with pytest.raises(RateLimitedError):
+        run_evaluation(CLUES[:5], make, make_toolbox(lexicon), out)
+    assert len(out.read_text().splitlines()) == 2  # nothing written for the refused clue
+
+    QuotaSolver.budget = 10  # the next day
+    rows = run_evaluation(CLUES[:5], make, make_toolbox(lexicon), out)
+
+    assert len(rows) == 5
+    assert len(FakeSolver.calls) == 5  # each clue solved exactly once
 
 
 def test_crossing_letters_are_simulated(lexicon: Lexicon, tmp_path: Path) -> None:

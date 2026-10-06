@@ -25,6 +25,7 @@ from cryptic_agent.agent.solver import Solver, SolveResult
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.extraction.table_parser import ParsedClue, parse_clue_table
 from cryptic_agent.jsonl import append_jsonl, read_jsonl
+from cryptic_agent.llm.client import RateLimitedError
 from cryptic_agent.models import RawPost
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,12 @@ def run_evaluation(
         )
         pattern = reveal_letters(clue.answer, reveal_every) if reveal_every else None
         started = time.monotonic()
-        result = make_solver(toolbox).solve(clue.clue_text, clue.enumeration, pattern=pattern)
+        try:
+            result = make_solver(toolbox).solve(clue.clue_text, clue.enumeration, pattern=pattern)
+        except RateLimitedError as exc:
+            # Nothing is written for this clue, so re-running resumes right here.
+            logger.warning("stopping after %d/%d clues: out of quota (%s)", i - 1, len(todo), exc)
+            raise
         row = to_row(clue, result, time.monotonic() - started, pattern)
         append_jsonl(out_path, [row])
         if on_row:
