@@ -15,6 +15,8 @@ uv sync                                        # install deps + dev group into .
 uv run cryptic-agent --help                    # CLI: scrape|extract|solve|eval
 uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
 uv run cryptic-agent solve --clue "Senator arranged crime" --enumeration 7 [--pattern T?E?S?N]
+uv run cryptic-agent eval --n 60 --seed 42 --name baseline   # resumable; results in data/runs/<name>.jsonl
+uv run cryptic-agent eval --n 60 --seed 42 --name baseline --report-only
 uv sync --group demo                           # then open demos/*.ipynb (kernel: .venv); outputs are stripped on commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests                          # strict, with the pydantic plugin
@@ -46,6 +48,7 @@ The pipeline is **scrape → extract → store/index → solve → eval**. Each 
   - About 1,300 UKACD entries lost their accents upstream ('pr\ufffdcis'). They are restored only when exactly one attested word fits the pattern, never guessed, so a repair can never add a non-word.
   - Mined abbreviations need 3+ supporting clues, which filters noise like `a → GR`. `lexicon/data/abbreviations.tsv` is a hand-checked list that always counts (it adds "one → I", which the data misses).
 - **`tools/`:** the verification tools. `Dictionary.load()` (UKACD + well-attested past answers + repaired entries; 99.7% of real answers) gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
+- **`evaluation/run.py`:** a seeded sample of scraped clues, spread evenly across the blogger's wordplay labels; each result is appended to `data/runs/<name>.jsonl` as it finishes, so an interrupted run resumes; each clue's own puzzle is passed as `exclude_urls`. The report's key number is **CONFIRMED BUT WRONG**, which must stay 0. Compare runs with the same `--n --seed` to measure a change.
 - **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code. `extract`, `solve` and `eval` are still stubs.
 
 **`agent/`: the solver**, built so it is never confidently wrong.

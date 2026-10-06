@@ -16,6 +16,17 @@ from dotenv import find_dotenv, load_dotenv
 from cryptic_agent import config
 from cryptic_agent.agent.solver import Solver, Step
 from cryptic_agent.agent.tools import Toolbox
+from cryptic_agent.evaluation.run import (
+    ResultRow,
+    clue_key,
+    format_report,
+    load_clues,
+    load_posts,
+    run_evaluation,
+    sample_clues,
+    summarise,
+)
+from cryptic_agent.jsonl import read_jsonl
 from cryptic_agent.lexicon.build import build_lexicon
 from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMismatchError, fetch
 from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
@@ -118,6 +129,51 @@ def _solve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _evaluate(args: argparse.Namespace) -> int:
+    name = args.name or f"n{args.n}-seed{args.seed}" + (
+        f"-reveal{args.reveal_every}" if args.reveal_every else ""
+    )
+    out_path = config.data_dir() / "runs" / f"{name}.jsonl"
+    posts_path = output_path(config.raw_dir(), "guardian/quick-cryptic")
+    if not posts_path.exists():
+        print(f"error: no scraped clues at {posts_path}; run cryptic-agent scrape", file=sys.stderr)
+        return 2
+    clues = sample_clues(load_clues(load_posts(posts_path)), args.n, args.seed)
+
+    if not args.report_only:
+        try:
+            toolbox = Toolbox(Dictionary.load(), Lexicon())
+        except (LexiconNotFoundError, DictionaryNotFoundError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        llm = GroqClient()
+
+        def progress(row: ResultRow, i: int, total: int) -> None:
+            mark = "right" if row.right else "WRONG"
+            print(
+                f"[{i}/{total}] {row.status:<9} {mark}  {row.answer or '-':<12} "
+                f"({row.expected})  {row.clue} ({row.enumeration})",
+                flush=True,
+            )
+
+        run_evaluation(
+            clues,
+            lambda tb: Solver(llm, tb),
+            toolbox,
+            out_path,
+            reveal_every=args.reveal_every,
+            on_row=progress,
+        )
+    if not out_path.exists():
+        print(f"error: no results at {out_path}", file=sys.stderr)
+        return 2
+    keys = {clue_key(c) for c in clues}
+    rows = [r for r in read_jsonl(out_path, ResultRow) if r.key in keys]
+    print(f"\nRun: {out_path} ({len(rows)}/{len(clues)} clues)\n")
+    print(format_report(summarise(rows)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
@@ -159,12 +215,22 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--quiet", action="store_true", help="Only print the verdict.")
     solve.set_defaults(handler=_solve)
 
-    evaluate = subparsers.add_parser("eval", help="Score the solver on held-out clues.")
-    evaluate.add_argument("--dataset", type=Path, default=None, help="clues.jsonl to test on.")
-    evaluate.add_argument("--n", type=int, default=50, help="Number of test clues.")
-    evaluate.add_argument("--n-examples", type=int, default=5, help="Few-shot examples per clue.")
-    evaluate.add_argument("--seed", type=int, default=42, help="Random seed for the split.")
-    evaluate.set_defaults(handler=_not_implemented)
+    evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
+    evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
+    evaluate.add_argument("--seed", type=int, default=42, help="Seed for the sample.")
+    evaluate.add_argument(
+        "--name", default=None, help="Run name; results go to data/runs/<name>.jsonl."
+    )
+    evaluate.add_argument(
+        "--reveal-every",
+        type=int,
+        default=None,
+        help="Simulate crossing letters: reveal every Nth letter (2 = M?R?N?U?S).",
+    )
+    evaluate.add_argument(
+        "--report-only", action="store_true", help="Summarise an existing run, solve nothing."
+    )
+    evaluate.set_defaults(handler=_evaluate)
 
     return parser
 

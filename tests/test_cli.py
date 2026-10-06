@@ -38,7 +38,6 @@ def test_no_command_is_a_usage_error() -> None:
     "argv",
     [
         ["extract"],
-        ["eval"],
     ],
 )
 def test_stub_commands_parse_and_report_not_implemented(
@@ -49,11 +48,12 @@ def test_stub_commands_parse_and_report_not_implemented(
 
 
 def test_parser_applies_types_and_defaults() -> None:
-    args = cli.build_parser().parse_args(["eval", "--dataset", "clues.jsonl", "--n", "10"])
+    args = cli.build_parser().parse_args(["eval", "--n", "10", "--reveal-every", "2"])
 
-    assert args.dataset == Path("clues.jsonl")
     assert args.n == 10
+    assert args.reveal_every == 2
     assert args.seed == 42
+    assert args.report_only is False
 
 
 def test_missing_api_key_is_reported_without_traceback(
@@ -67,7 +67,7 @@ def test_missing_api_key_is_reported_without_traceback(
     # Stand in for a real command that needs the key.
     monkeypatch.setattr(cli, "_not_implemented", needs_key)
 
-    assert cli.main(["eval"]) == 2
+    assert cli.main(["extract"]) == 2
     assert f"{config.API_KEY_ENV_VAR} is not set" in capsys.readouterr().err
 
 
