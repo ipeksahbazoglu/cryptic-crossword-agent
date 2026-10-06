@@ -7,17 +7,23 @@ return a process exit code; stage logic lives in its own module, not here.
 import argparse
 import logging
 import sys
+import textwrap
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
+from cryptic_agent.agent.solver import Solver, Step
+from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.lexicon.build import build_lexicon
 from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMismatchError, fetch
+from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
 from cryptic_agent.lexicon.store import default_path as lexicon_path
+from cryptic_agent.llm.client import GroqClient
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
+from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
 
 Handler = Callable[[argparse.Namespace], int]
 
@@ -67,6 +73,51 @@ def _ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_step(step: Step) -> None:
+    if step.kind == "thought":
+        print(f"  thinking: {textwrap.shorten(step.text, 300)}")
+    elif step.kind == "tool":
+        args = ", ".join(f"{k}={v!r}" for k, v in step.arguments.items())
+        print(f"  tool: {step.tool}({args})\n        -> {textwrap.shorten(step.result, 200)}")
+
+
+def _solve(args: argparse.Namespace) -> int:
+    try:
+        toolbox = Toolbox(Dictionary.load(), Lexicon())
+    except (LexiconNotFoundError, DictionaryNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    llm = GroqClient()
+    solver = Solver(llm, toolbox, on_step=None if args.quiet else _print_step)
+    print(f"Clue: {args.clue} ({args.enumeration})")
+    result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
+
+    if result.verdict is None or result.worksheet is None:
+        print(f"\nNo valid worksheet: {result.error}", file=sys.stderr)
+        return 1
+    verdict, worksheet = result.verdict, result.worksheet
+    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]")
+    for d in worksheet.definitions:
+        print(f"  definition: {d.text!r} ({d.position})")
+    for w in worksheet.wordplay:
+        indicator = f", indicator {w.indicator!r}" if w.indicator else ""
+        print(f"  wordplay:   {w.mechanism} of {w.fodder!r}{indicator} -> {w.produces}")
+        print(f"              {w.explanation}")
+    if worksheet.link_words:
+        print(f"  link words: {', '.join(repr(w) for w in worksheet.link_words)}")
+    if worksheet.alternatives:
+        print(f"  alternatives: {', '.join(worksheet.alternatives)}")
+    print("checks:")
+    for c in verdict.checks:
+        mark = {True: "ok", False: "FAIL", None: "?"}[c.passed]
+        print(f"  [{mark:>4}] {c.name}: {c.detail}")
+    print(
+        f"cost: {llm.totals.requests} requests, {result.usage.total_tokens:,} tokens, "
+        f"waited {llm.totals.waited_seconds:.0f}s for rate limits"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
@@ -102,9 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     solve = subparsers.add_parser("solve", help="Solve a single clue.")
     solve.add_argument("--clue", required=True, help="Clue text without the enumeration.")
     solve.add_argument("--enumeration", required=True, help="Answer lengths, e.g. '7' or '3,4'.")
-    solve.add_argument("--examples", type=Path, default=None, help="clues.jsonl for few-shot.")
-    solve.add_argument("--n-examples", type=int, default=5, help="Few-shot examples to include.")
-    solve.set_defaults(handler=_not_implemented)
+    solve.add_argument(
+        "--pattern", default=None, help="Known letters from crossing answers, e.g. 'T?E?S?N'."
+    )
+    solve.add_argument("--quiet", action="store_true", help="Only print the verdict.")
+    solve.set_defaults(handler=_solve)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on held-out clues.")
     evaluate.add_argument("--dataset", type=Path, default=None, help="clues.jsonl to test on.")

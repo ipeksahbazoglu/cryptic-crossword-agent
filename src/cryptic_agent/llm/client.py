@@ -11,11 +11,10 @@ which Groq and most other providers accept.
 
 import json
 import logging
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import groq
 import httpx
@@ -25,6 +24,7 @@ from cryptic_agent import config
 logger = logging.getLogger(__name__)
 
 Message = dict[str, Any]
+Effort = Literal["low", "medium", "high"]  # how much a reasoning model thinks first
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,21 @@ class Completion:
         return message
 
 
+class LLMError(RuntimeError):
+    """Anything that went wrong talking to the model. Callers handle only these."""
+
+
+class StructuredOutputError(LLMError):
+    """The model did not produce output matching the requested JSON schema."""
+
+
+class InvalidToolCallError(LLMError):
+    """The model called a tool that doesn't exist, so the provider rejected the reply.
+
+    A mistake the model can recover from: tell it and let it continue.
+    """
+
+
 class LLMClient(Protocol):
     def complete(
         self,
@@ -77,6 +92,7 @@ class LLMClient(Protocol):
         tools: Sequence[Mapping[str, Any]] | None = None,
         json_schema: Mapping[str, Any] | None = None,
         max_tokens: int = 4096,
+        effort: Effort | None = None,
     ) -> Completion: ...
 
 
@@ -95,42 +111,39 @@ class UsageTotals:
         self.completion_tokens += usage.completion_tokens
 
 
-def parse_duration(text: str) -> float:
-    """Groq's reset times: '5.512s' -> 5.512, '1m26.4s' -> 86.4, '250ms' -> 0.25."""
-    seconds = 0.0
-    for amount, unit in re.findall(r"([\d.]+)(ms|h|m|s)", text):
-        seconds += float(amount) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
-    return seconds
-
-
 @dataclass
 class TokenBudget:
     """Pace requests using the budget the API reports after each call.
 
-    Before a request, if the tokens left in the current minute are fewer than a
-    typical request needs, wait until the budget resets instead of being refused.
+    The per-minute budget refills continuously (8,000 tokens/min is about 133 a
+    second), so before a request we wait only as long as it takes to refill
+    enough for a typical request, not for the whole budget to reset.
     """
 
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     remaining: int | None = None
-    resets_at: float = 0.0
+    per_minute: int | None = None
+    seen_at: float = 0.0
 
     def update(self, headers: Mapping[str, str]) -> None:
         if "x-ratelimit-remaining-tokens" in headers:
             self.remaining = int(headers["x-ratelimit-remaining-tokens"])
-            reset = parse_duration(headers.get("x-ratelimit-reset-tokens", "0s"))
-            self.resets_at = self.clock() + reset
+            self.seen_at = self.clock()
+        if "x-ratelimit-limit-tokens" in headers:
+            self.per_minute = int(headers["x-ratelimit-limit-tokens"])
 
     def wait_for(self, tokens_needed: int) -> float:
-        """Sleep if needed; return how long we waited."""
-        if self.remaining is None or self.remaining >= tokens_needed:
+        """Sleep until about `tokens_needed` tokens are available; return the wait."""
+        if self.remaining is None or not self.per_minute:
             return 0.0
-        wait = max(0.0, self.resets_at - self.clock())
-        if wait:
-            logger.info("token budget low (%d left): waiting %.1fs", self.remaining, wait)
-            self.sleep(wait)
-        self.remaining = None  # unknown until the next response tells us
+        refill_per_second = self.per_minute / 60
+        available = self.remaining + (self.clock() - self.seen_at) * refill_per_second
+        wait = (tokens_needed - available) / refill_per_second
+        if wait <= 0:
+            return 0.0
+        logger.info("token budget low (~%d left): waiting %.1fs", available, wait)
+        self.sleep(wait)
         return wait
 
 
@@ -140,8 +153,9 @@ class GroqClient:
 
     model: str = config.MODEL
     api_key: str | None = None
-    expected_tokens: int = 3000  # wait for at least this much budget before a request
+    expected_tokens: int = 2500  # a typical request: ~1k prompt + ~1.5k output incl. reasoning
     max_retries: int = 5  # the SDK retries 429/5xx with backoff, honouring Retry-After
+    timeout: float = 60.0  # seconds per attempt, so a stuck connection fails fast and retries
     http_client: httpx.Client | None = None
     budget: TokenBudget = field(default_factory=TokenBudget)
     totals: UsageTotals = field(default_factory=UsageTotals)
@@ -150,6 +164,7 @@ class GroqClient:
         self._client = groq.Groq(
             api_key=self.api_key or config.get_api_key(),
             max_retries=self.max_retries,
+            timeout=self.timeout,
             http_client=self.http_client,
         )
 
@@ -160,6 +175,7 @@ class GroqClient:
         tools: Sequence[Mapping[str, Any]] | None = None,
         json_schema: Mapping[str, Any] | None = None,
         max_tokens: int = 4096,
+        effort: Effort | None = None,
     ) -> Completion:
         self.totals.waited_seconds += self.budget.wait_for(self.expected_tokens)
         kwargs: dict[str, Any] = {
@@ -169,12 +185,27 @@ class GroqClient:
         }
         if tools:
             kwargs["tools"] = list(tools)
+        if effort is not None:
+            kwargs["reasoning_effort"] = effort
         if json_schema is not None:
             kwargs["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "response", "strict": True, "schema": dict(json_schema)},
             }
-        raw = self._client.chat.completions.with_raw_response.create(**kwargs)
+        try:
+            raw = self._client.chat.completions.with_raw_response.create(**kwargs)
+        except groq.BadRequestError as exc:
+            # Groq validates the model's output server-side and rejects a reply
+            # that breaks the request: a JSON schema mismatch (sometimes an empty
+            # reply), or a call to a tool that wasn't offered (gpt-oss sometimes
+            # leaks its internal "commentary" channel as a tool call).
+            if "json_validate_failed" in str(exc):
+                raise StructuredOutputError(str(exc)) from exc
+            if "tool_use_failed" in str(exc):
+                raise InvalidToolCallError(str(exc)) from exc
+            raise LLMError(str(exc)) from exc
+        except groq.APIError as exc:  # rate limits after all retries, timeouts, 5xx
+            raise LLMError(f"{type(exc).__name__}: {exc}") from exc
         self.budget.update(raw.headers)
         response = raw.parse()
 
@@ -212,9 +243,12 @@ def _parse_arguments(arguments: str) -> dict[str, Any]:
 
 @dataclass
 class ScriptedLLM:
-    """A fake LLMClient for tests: returns prepared completions in order, records requests."""
+    """A fake LLMClient for tests: returns prepared completions in order, records requests.
 
-    replies: list[Completion]
+    A reply that is an exception is raised instead, to simulate a failing call.
+    """
+
+    replies: list[Completion | Exception]
     requests: list[dict[str, Any]] = field(default_factory=list)
     totals: UsageTotals = field(default_factory=UsageTotals)
 
@@ -225,12 +259,21 @@ class ScriptedLLM:
         tools: Sequence[Mapping[str, Any]] | None = None,
         json_schema: Mapping[str, Any] | None = None,
         max_tokens: int = 4096,
+        effort: Effort | None = None,
     ) -> Completion:
         self.requests.append(
-            {"messages": [dict(m) for m in messages], "tools": tools, "json_schema": json_schema}
+            {
+                "messages": [dict(m) for m in messages],
+                "tools": tools,
+                "json_schema": json_schema,
+                "max_tokens": max_tokens,
+                "effort": effort,
+            }
         )
         if not self.replies:
             raise AssertionError("ScriptedLLM ran out of replies")
         reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
         self.totals.add(reply.usage)
         return reply
