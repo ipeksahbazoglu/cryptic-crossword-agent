@@ -69,7 +69,7 @@ def test_missing_api_key_is_reported_without_traceback(
     monkeypatch.setattr(cli, "_not_implemented", needs_key)
 
     assert cli.main(["eval"]) == 2
-    assert "ANTHROPIC_API_KEY is not set" in capsys.readouterr().err
+    assert f"{config.API_KEY_ENV_VAR} is not set" in capsys.readouterr().err
 
 
 class _StubWordPress(WordPressClient):

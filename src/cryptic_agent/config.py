@@ -8,14 +8,16 @@ control the environment with monkeypatch.
 import os
 from pathlib import Path
 
-MODEL = "claude-sonnet-5"
+# Groq free tier. gpt-oss-120b was the only candidate that solved our probe clue
+# and supports tool calls and strict JSON-schema output.
+MODEL = "openai/gpt-oss-120b"
 
 DATA_DIR_ENV_VAR = "CRYPTIC_AGENT_DATA_DIR"
-API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+API_KEY_ENV_VAR = "GROQ_API_KEY"
 
 
 class MissingAPIKeyError(RuntimeError):
-    """Raised when a command needs the Anthropic API key and none is configured."""
+    """Raised when a command needs the LLM API key and none is configured."""
 
 
 def data_dir() -> Path:
@@ -39,7 +41,7 @@ def lexicon_dir() -> Path:
 
 
 def get_api_key() -> str:
-    """Return the Anthropic API key, failing with a clear message if it is missing.
+    """Return the Groq API key, failing with a clear message if it is missing.
 
     Only commands that call the API should call this, so `scrape` and `--help`
     work without a key.
