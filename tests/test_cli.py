@@ -38,7 +38,6 @@ def test_no_command_is_a_usage_error() -> None:
     "argv",
     [
         ["extract"],
-        ["solve", "--clue", "Senator arranged crime", "--enumeration", "7"],
         ["eval"],
     ],
 )

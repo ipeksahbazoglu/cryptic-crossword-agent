@@ -6,6 +6,7 @@ Each function is pure: same inputs, same output, no network or globals.
 """
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -46,6 +47,14 @@ class AnswerCheck(ToolResult):
 class ReversalResult(ToolResult):
     input: str
     reversed: str
+
+
+LetterSelection = Literal["first", "last", "odd", "even"]
+
+
+class SelectionResult(ToolResult):
+    which: LetterSelection
+    letters: str
 
 
 def find_anagrams(dictionary: Dictionary, letters: str, length: int | None = None) -> AnagramResult:
@@ -98,17 +107,19 @@ def check_hidden_word(dictionary: Dictionary, text: str, length: int) -> HiddenW
 
 
 def check_answer(dictionary: Dictionary, answer: str, enumeration: str) -> AnswerCheck:
-    """Check a candidate fits the enumeration and every word in it is real.
+    """Check a candidate fits the enumeration and is real.
 
-    Multi-word answers are split by the enumeration, so ICECREAM (3,5) is
-    checked as ICE + CREAM rather than looked up as one word.
+    A multi-word answer is real if the whole phrase is in the dictionary
+    (STAND-IN, stored whole) or every word is (ICE CREAM (3,5) as ICE + CREAM).
     """
     letters = normalize_answer(answer)
     lengths = enumeration_lengths(enumeration)
     length_ok = len(letters) == sum(lengths)
 
     unknown: list[str] = []
-    if length_ok:
+    if length_ok and letters in dictionary:
+        pass  # the whole answer is a dictionary entry
+    elif length_ok:
         start = 0
         for n in lengths:
             part = letters[start : start + n]
@@ -131,3 +142,22 @@ def reverse_letters(text: str) -> ReversalResult:
     """Reverse the letters of `text`, for reversal clues: 'STRAP' -> 'PARTS'."""
     letters = normalize_answer(text)
     return ReversalResult(input=letters, reversed=letters[::-1])
+
+
+def select_letters(text: str, which: LetterSelection) -> SelectionResult:
+    """Letters picked out of `text`, for acrostics and alternating-letter clues.
+
+    first/last: the first or last letter of each word of the fodder ("cleric over day
+    explained" -> CODE, with "Originally" as the indicator). odd/even: alternate
+    letters of the words run together ("oddly" or "regularly" signal these).
+    """
+    words = [normalize_answer(w) for w in text.split()]
+    words = [w for w in words if w]
+    if which == "first":
+        letters = "".join(w[0] for w in words)
+    elif which == "last":
+        letters = "".join(w[-1] for w in words)
+    else:
+        squashed = "".join(words)
+        letters = squashed[0::2] if which == "odd" else squashed[1::2]
+    return SelectionResult(which=which, letters=letters)

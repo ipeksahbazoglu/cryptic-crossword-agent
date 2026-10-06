@@ -44,8 +44,12 @@ _ENUMERATION_RE = re.compile(r"^\d+(?:[,-]\d+)*$")
 
 
 def enumeration_lengths(enumeration: str) -> list[int]:
-    """Word lengths in an enumeration: '7' -> [7], '3,4' -> [3, 4], '5-3' -> [5, 3]."""
-    return [int(part) for part in re.split(r"[,-]", enumeration)]
+    """Word lengths in an enumeration: '7' -> [7], '(3, 4)' -> [3, 4], '5-3' -> [5, 3].
+
+    Brackets and spaces are ignored, since models and people often include them.
+    """
+    cleaned = re.sub(r"[()\s]", "", enumeration)
+    return [int(part) for part in re.split(r"[,\-\u2013]", cleaned)]
 
 
 # Letters NFKD does not split into base letter + accent mark.

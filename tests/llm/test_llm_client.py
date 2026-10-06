@@ -9,14 +9,17 @@ import pytest
 from cryptic_agent.llm.client import (
     Completion,
     GroqClient,
+    InvalidToolCallError,
+    LLMError,
     ScriptedLLM,
+    StructuredOutputError,
     TokenBudget,
     ToolCall,
     Usage,
-    parse_duration,
 )
 
 RATE_HEADERS = {
+    "x-ratelimit-limit-tokens": "8000",
     "x-ratelimit-remaining-tokens": "7265",
     "x-ratelimit-reset-tokens": "5.5s",
 }
@@ -110,6 +113,58 @@ def test_json_schema_is_requested_strictly() -> None:
     assert response_format["json_schema"]["schema"] == schema
 
 
+def test_schema_validation_failure_becomes_structured_output_error() -> None:
+    # What Groq returns when strict-schema output doesn't validate (seen live).
+    error = {
+        "error": {
+            "message": "Failed to validate JSON.",
+            "type": "invalid_request_error",
+            "code": "json_validate_failed",
+            "failed_generation": "",
+        }
+    }
+    fake = FakeGroq(httpx.Response(400, json=error))
+
+    with pytest.raises(StructuredOutputError, match="json_validate_failed"):
+        make_client(fake).complete([{"role": "user", "content": "x"}], json_schema={})
+
+
+def test_invalid_tool_call_is_recognised() -> None:
+    # Seen live: gpt-oss leaking its internal "commentary" channel as a tool call.
+    error = {
+        "error": {
+            "message": "attempted to call tool 'commentary' which was not in request.tools",
+            "type": "invalid_request_error",
+            "code": "tool_use_failed",
+        }
+    }
+    fake = FakeGroq(httpx.Response(400, json=error))
+
+    with pytest.raises(InvalidToolCallError, match="commentary"):
+        make_client(fake).complete([{"role": "user", "content": "x"}])
+
+
+def test_other_api_errors_become_llm_errors() -> None:
+    fake = FakeGroq(httpx.Response(400, json={"error": {"message": "bad model"}}))
+
+    with pytest.raises(LLMError, match="bad model") as info:
+        make_client(fake).complete([{"role": "user", "content": "x"}])
+    assert not isinstance(info.value, (StructuredOutputError, InvalidToolCallError))
+
+
+def test_reasoning_effort_is_sent_when_asked() -> None:
+    fake = FakeGroq(
+        *[httpx.Response(200, json=chat_response({"role": "assistant"})) for _ in range(2)]
+    )
+    client = make_client(fake)
+
+    client.complete([{"role": "user", "content": "x"}], effort="low")
+    client.complete([{"role": "user", "content": "x"}])
+
+    assert fake.requests[0]["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in fake.requests[1]
+
+
 def test_malformed_tool_arguments_are_kept_raw() -> None:
     fake = FakeGroq(
         httpx.Response(
@@ -186,14 +241,6 @@ def test_rate_limited_request_is_retried() -> None:
     assert len(fake.requests) == 2
 
 
-@pytest.mark.parametrize(
-    ("text", "seconds"),
-    [("5.512s", 5.512), ("1m26.4s", 86.4), ("250ms", 0.25), ("2h", 7200.0), ("0s", 0.0)],
-)
-def test_parse_duration(text: str, seconds: float) -> None:
-    assert parse_duration(text) == pytest.approx(seconds)
-
-
 class FakeClock:
     def __init__(self) -> None:
         self.now = 100.0
@@ -207,24 +254,37 @@ class FakeClock:
         self.now += seconds
 
 
-def test_budget_waits_for_reset_when_too_low() -> None:
-    clock = FakeClock()
+def budget_with(remaining: int, clock: FakeClock) -> TokenBudget:
     budget = TokenBudget(clock=clock, sleep=clock.sleep)
-    budget.update({"x-ratelimit-remaining-tokens": "500", "x-ratelimit-reset-tokens": "7s"})
+    budget.update(
+        {"x-ratelimit-limit-tokens": "8000", "x-ratelimit-remaining-tokens": str(remaining)}
+    )
+    return budget
 
-    waited = budget.wait_for(3000)
 
-    assert waited == pytest.approx(7.0)
-    assert clock.sleeps == [pytest.approx(7.0)]
+def test_budget_waits_only_for_the_refill_it_needs() -> None:
+    clock = FakeClock()
+    budget = budget_with(1000, clock)
+
+    waited = budget.wait_for(3000)  # 2,000 short at 8,000/min = 133.3/s -> 15 s
+
+    assert waited == pytest.approx(15.0)
+    assert clock.sleeps == [pytest.approx(15.0)]
+
+
+def test_budget_counts_refill_since_the_last_response() -> None:
+    clock = FakeClock()
+    budget = budget_with(1000, clock)
+    clock.now += 9  # 9 s later, 1,200 tokens have refilled
+
+    assert budget.wait_for(3000) == pytest.approx(6.0)
 
 
 def test_budget_does_not_wait_when_enough_or_unknown() -> None:
     clock = FakeClock()
-    budget = TokenBudget(clock=clock, sleep=clock.sleep)
 
-    assert budget.wait_for(3000) == 0.0  # nothing known yet
-    budget.update({"x-ratelimit-remaining-tokens": "7000", "x-ratelimit-reset-tokens": "7s"})
-    assert budget.wait_for(3000) == 0.0
+    assert TokenBudget(clock=clock, sleep=clock.sleep).wait_for(3000) == 0.0  # nothing known
+    assert budget_with(7000, clock).wait_for(3000) == 0.0
     assert clock.sleeps == []
 
 

@@ -14,7 +14,8 @@ The design comes from `../CLAUDE_CODE_HANDOFF.md`. Its "Repo state" section is o
 uv sync                                        # install deps + dev group into .venv
 uv run cryptic-agent --help                    # CLI: scrape|extract|solve|eval
 uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
-uv sync --group demo                           # then open demos/01_scrape_and_parse.ipynb (kernel: .venv)
+uv run cryptic-agent solve --clue "Senator arranged crime" --enumeration 7 [--pattern T?E?S?N]
+uv sync --group demo                           # then open demos/*.ipynb (kernel: .venv); outputs are stripped on commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests                          # strict, with the pydantic plugin
 uv run pytest                                  # tests never hit the network or an LLM
@@ -47,6 +48,11 @@ The pipeline is **scrape → extract → store/index → solve → eval**. Each 
 - **`tools/`:** the verification tools. `Dictionary.load()` (UKACD + well-attested past answers + repaired entries; 99.7% of real answers) gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
 - **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code. `extract`, `solve` and `eval` are still stubs.
 
-**Solver design, decided but not yet built:** agentic retrieval. The LLM gets the clue plus tools. Some tools search the clue store: similar definitions and the answers they led to, what an indicator signalled in past clues, how an answer has been clued before. The rest are the verification tools. The model segments the clue in its own reasoning and decides what to look up. An answer is accepted only once a verification tool confirms it, and the answer cites the historical clues it used.
+**`agent/`: the solver**, built so it is never confidently wrong.
+  - `tools.py`: `Toolbox` declares each tool once (name, description for the model, JSON parameters, function) over the dictionary and lexicon; `run()` returns compact JSON and turns bad calls into error results the model can read. `exclude_urls` flows into every lexicon lookup.
+  - `solver.py`: `Solver.solve()` runs the tool-use loop (at most `max_rounds`), then makes one final call with the strict `WORKSHEET_SCHEMA`. Every thought and tool call is recorded as a `Step`.
+  - `worksheet.py`: the model's full parse of the clue (definitions with positions, wordplay steps with indicator, fodder and produced letters, link words). The schema is hand-written for providers' strict mode; a test keeps it in sync with the pydantic model.
+  - `verify.py`: code re-checks the worksheet. **confirmed** only if the answer fits the enumeration (and `--pattern`) and is a real word, the definitions sit where claimed, at least one wordplay step is verified mechanically and none fails, every clue word has a role, and the model claimed confirmed. Otherwise **pencilled** (fits, not proven: double definitions, synonym charades) or **unsure** (doesn't fit). Don't loosen these rules without tests: they are what "never confidently wrong" rests on.
+  - The human-style design (fast pass of code-generated candidates, crossing letters, stuck checklist) is the plan for what comes next; see `../CLAUDE_CODE_HANDOFF.md` for the original design notes.
 
 **LLM provider: Groq free tier**, model `openai/gpt-oss-120b` (`config.MODEL`; key in `.env` as `GROQ_API_KEY`). `llm/client.py` defines a provider-neutral `LLMClient` protocol (OpenAI-style messages in, `Completion` with text, tool calls, usage and the model's separate `reasoning` out). `GroqClient` implements it: it paces requests with `TokenBudget` using the `x-ratelimit-*` headers (free tier: 8,000 tokens/min, 1,000 requests/day), and the SDK retries 429/5xx. Tests use `ScriptedLLM` or an `httpx.MockTransport`, never the real API. Groq has no embeddings API, so any embeddings must be local.

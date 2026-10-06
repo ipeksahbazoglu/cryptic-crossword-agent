@@ -1,4 +1,5 @@
 from itertools import permutations
+from typing import Literal
 
 import pytest
 from hypothesis import given
@@ -10,13 +11,14 @@ from cryptic_agent.tools.wordplay import (
     check_hidden_word,
     find_anagrams,
     reverse_letters,
+    select_letters,
 )
 
 WORDS = Dictionary(
     [
         "senator", "treason", "atoners",  # anagrams of each other
         "roman", "romance", "man", "cerebral", "a",  # hidden-word fodder
-        "ice", "cream", "strap", "parts", "cat", "act",
+        "ice", "cream", "strap", "parts", "cat", "act", "stand-in",
     ]
 )  # fmt: skip
 
@@ -112,6 +114,7 @@ def test_hidden_word_rejects_non_positive_length(length: int) -> None:
         ("treason", "7", True, [], True),
         ("ice cream", "3,5", True, [], True),  # checked as ICE + CREAM
         ("ICECREAM", "8", True, ["ICECREAM"], False),  # not one dictionary word
+        ("stand-in", "5-2", True, [], True),  # phrase stored whole
         ("treason", "6", False, [], False),
         ("xyzzy", "5", True, ["XYZZY"], False),
     ],
@@ -135,3 +138,22 @@ def test_reverse_letters() -> None:
 def test_reversing_twice_is_identity(text: str) -> None:
     once = reverse_letters(text).reversed
     assert reverse_letters(once).reversed == text
+
+
+@pytest.mark.parametrize(
+    ("text", "which", "letters"),
+    [
+        (
+            "cleric over day explained",
+            "first",
+            "CODE",
+        ),  # fodder only: "Originally" is the indicator
+        ("bus stop", "last", "SP"),
+        ("bareheaded", "odd", "BRHAE"),
+        ("bareheaded", "even", "AEEDD"),
+    ],
+)
+def test_select_letters(
+    text: str, which: Literal["first", "last", "odd", "even"], letters: str
+) -> None:
+    assert select_letters(text, which).letters == letters

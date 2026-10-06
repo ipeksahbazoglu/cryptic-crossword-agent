@@ -41,7 +41,14 @@ def anagram_clue(**overrides: Any) -> Clue:
 
 @pytest.mark.parametrize(
     ("enumeration", "expected"),
-    [("7", [7]), ("3,4", [3, 4]), ("5-3", [5, 3]), ("2,3,4", [2, 3, 4])],
+    [
+        ("7", [7]),
+        ("3,4", [3, 4]),
+        ("5-3", [5, 3]),
+        ("2,3,4", [2, 3, 4]),
+        ("(7)", [7]),  # models often pass it with brackets
+        ("(3, 4)", [3, 4]),
+    ],
 )
 def test_enumeration_lengths(enumeration: str, expected: list[int]) -> None:
     assert enumeration_lengths(enumeration) == expected
