@@ -31,7 +31,7 @@ from cryptic_agent.lexicon.build import build_lexicon
 from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMismatchError, fetch
 from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
 from cryptic_agent.lexicon.store import default_path as lexicon_path
-from cryptic_agent.llm.client import GroqClient
+from cryptic_agent.llm.client import GroqClient, RateLimitedError
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
 from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
@@ -85,7 +85,9 @@ def _ingest(args: argparse.Namespace) -> int:
 
 
 def _print_step(step: Step) -> None:
-    if step.kind == "thought":
+    if step.kind == "fastpass":
+        print(textwrap.indent(step.text, "  "))
+    elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
         args = ", ".join(f"{k}={v!r}" for k, v in step.arguments.items())
@@ -99,7 +101,12 @@ def _solve(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     llm = GroqClient()
-    solver = Solver(llm, toolbox, on_step=None if args.quiet else _print_step)
+    solver = Solver(
+        llm,
+        toolbox,
+        on_step=None if args.quiet else _print_step,
+        fast_pass=not args.no_fast_pass,
+    )
     print(f"Clue: {args.clue} ({args.enumeration})")
     result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
 
@@ -156,14 +163,21 @@ def _evaluate(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-        run_evaluation(
-            clues,
-            lambda tb: Solver(llm, tb),
-            toolbox,
-            out_path,
-            reveal_every=args.reveal_every,
-            on_row=progress,
-        )
+        try:
+            run_evaluation(
+                clues,
+                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass),
+                toolbox,
+                out_path,
+                reveal_every=args.reveal_every,
+                on_row=progress,
+            )
+        except RateLimitedError as exc:
+            print(
+                f"\nStopped: out of Groq quota ({str(exc)[:160]}...).\n"
+                "Progress is saved; run the same command again later to resume.",
+                file=sys.stderr,
+            )
     if not out_path.exists():
         print(f"error: no results at {out_path}", file=sys.stderr)
         return 2
@@ -213,6 +227,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--pattern", default=None, help="Known letters from crossing answers, e.g. 'T?E?S?N'."
     )
     solve.add_argument("--quiet", action="store_true", help="Only print the verdict.")
+    solve.add_argument(
+        "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
     solve.set_defaults(handler=_solve)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
@@ -229,6 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--report-only", action="store_true", help="Summarise an existing run, solve nothing."
+    )
+    evaluate.add_argument(
+        "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
     )
     evaluate.set_defaults(handler=_evaluate)
 

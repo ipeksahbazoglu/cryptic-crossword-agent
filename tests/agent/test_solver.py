@@ -13,6 +13,7 @@ from cryptic_agent.llm.client import (
     Completion,
     InvalidToolCallError,
     LLMError,
+    RateLimitedError,
     ScriptedLLM,
     StructuredOutputError,
     ToolCall,
@@ -104,9 +105,28 @@ def test_steps_are_recorded_and_streamed(toolbox: Toolbox) -> None:
 
     result = Solver(llm, toolbox, on_step=seen.append).solve("Senator arranged crime", "7")
 
-    assert [s.kind for s in result.steps] == ["thought", "tool", "thought", "worksheet"]
+    assert [s.kind for s in result.steps] == ["fastpass", "thought", "tool", "thought", "worksheet"]
     assert seen == result.steps
-    assert '"reversed":"PARTS"' in result.steps[1].result
+    assert '"reversed":"PARTS"' in result.steps[2].result
+
+
+def test_fast_pass_evidence_opens_the_conversation(toolbox: Toolbox) -> None:
+    llm = ScriptedLLM([text_reply("TREASON"), text_reply(json.dumps(WORKSHEET))])
+
+    Solver(llm, toolbox).solve("Senator arranged crime", "7")
+
+    first_user_message = llm.requests[0]["messages"][1]["content"]
+    assert "Fast pass" in first_user_message
+    assert "TREASON" in first_user_message  # anagram of 'Senator', found by code
+
+
+def test_fast_pass_can_be_switched_off(toolbox: Toolbox) -> None:
+    llm = ScriptedLLM([text_reply("TREASON"), text_reply(json.dumps(WORKSHEET))])
+
+    result = Solver(llm, toolbox, fast_pass=False).solve("Senator arranged crime", "7")
+
+    assert "Fast pass" not in llm.requests[0]["messages"][1]["content"]
+    assert "fastpass" not in [s.kind for s in result.steps]
 
 
 def test_rounds_are_capped(toolbox: Toolbox) -> None:
@@ -192,6 +212,14 @@ def test_api_failures_never_crash_a_solve(toolbox: Toolbox) -> None:
 
     assert result.answer is None
     assert "RateLimitError" in result.error
+
+
+def test_running_out_of_quota_is_raised_not_recorded(toolbox: Toolbox) -> None:
+    # Out of quota says nothing about the clue, so it must not become its result.
+    llm = ScriptedLLM([RateLimitedError("tokens per day (TPD)")])
+
+    with pytest.raises(RateLimitedError):
+        Solver(llm, toolbox).solve("Senator arranged crime", "7")
 
 
 def test_worksheet_schema_matches_the_model() -> None:
