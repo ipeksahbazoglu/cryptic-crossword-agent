@@ -13,6 +13,7 @@ convention from a one-off:
 never lets the solver look up the very clue it is being tested on.
 """
 
+import re
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -66,6 +67,22 @@ def curated_indicators() -> dict[str, tuple[str, ...]]:
     return {phrase: tuple(mechanisms) for phrase, mechanisms in found.items()}
 
 
+def url_variants(url: str) -> set[str]:
+    """Every equivalent spelling of a URL, so excluding a puzzle can't silently miss.
+
+    The cryptics dataset stores 'https://www.fifteensquared.net/...' while the API
+    we scrape returns 'https://fifteensquared.net/...': without this, an evaluation
+    of an older Guardian clue would not hide the clue's own explanation.
+    """
+    core = re.sub(r"^https?://(www\.)?", "", url.strip()).rstrip("/")
+    return {
+        f"{scheme}://{www}{core}{slash}"
+        for scheme in ("http", "https")
+        for www in ("", "www.")
+        for slash in ("", "/")
+    }
+
+
 def default_path() -> Path:
     return config.lexicon_dir() / "lexicon.sqlite"
 
@@ -85,10 +102,11 @@ class Lexicon:
     def _excluding(self, exclude_urls: Collection[str]) -> tuple[str, list[str]]:
         if not exclude_urls:
             return "", []
-        marks = ",".join("?" * len(exclude_urls))
+        urls = sorted({variant for url in exclude_urls for variant in url_variants(url)})
+        marks = ",".join("?" * len(urls))
         return (
             f" AND clue_ref NOT IN (SELECT id FROM clue_refs WHERE source_url IN ({marks}))",
-            list(exclude_urls),
+            urls,
         )
 
     def definition_answers(

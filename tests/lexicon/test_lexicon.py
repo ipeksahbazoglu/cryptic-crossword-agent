@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from cryptic_agent.lexicon.build import read_curated_abbreviations, repair_damaged
-from cryptic_agent.lexicon.store import Evidence, Lexicon, LexiconNotFoundError
+from cryptic_agent.lexicon.store import Evidence, Lexicon, LexiconNotFoundError, url_variants
 from cryptic_agent.tools.dictionary import Dictionary
 
 # --- definitions ---------------------------------------------------------------
@@ -75,6 +75,21 @@ def test_curated_list_parses() -> None:
 
 
 # --- indicators -----------------------------------------------------------------
+
+
+def test_exclusion_matches_any_spelling_of_the_url(lexicon: Lexicon) -> None:
+    # The dataset may store https://www.…/ while our scraper sees https://…
+    spellings = ["http://www.fifteensquared.net/guardian-1", "fifteensquared.net/guardian-2/"]
+
+    assert lexicon.definition_answers("love god", exclude_urls=spellings) == [Evidence("EROS", 1)]
+
+
+def test_url_variants() -> None:
+    variants = url_variants("https://fifteensquared.net/2021/04/26/guardian-28429/")
+
+    assert "https://www.fifteensquared.net/2021/04/26/guardian-28429/" in variants
+    assert "http://fifteensquared.net/2021/04/26/guardian-28429" in variants
+    assert len(variants) == 8
 
 
 def test_excluded_puzzles_drop_out_of_every_lookup(
