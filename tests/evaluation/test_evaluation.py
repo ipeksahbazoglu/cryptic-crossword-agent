@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -202,3 +203,31 @@ def test_confirmed_but_wrong_is_reported_loudly() -> None:
     assert len(summary.confirmed_wrong) == 1
     assert "CONFIRMED BUT WRONG: 1" in report
     assert "said SENATOR, expected TREASON" in report
+
+
+def test_load_clues_filters_dates_and_easy_series() -> None:
+    from datetime import datetime
+
+    from cryptic_agent.evaluation.run import load_clues
+    from cryptic_agent.models import RawPost
+
+    table = "| 1 | <u>**crime**</u> Senator arranged (7) | Answer TREASON |\n"
+
+    def post(post_id: int, title: str, year: int) -> RawPost:
+        return RawPost(
+            id=post_id,
+            date=datetime(year, 1, 1),
+            url=f"https://p/{post_id}",
+            title=title,
+            content_markdown="| | | |\n| --- | --- | --- |\n" + table,
+        )
+
+    posts = [
+        post(1, "Guardian Cryptic 30,000 by Paul", 2025),
+        post(2, "Guardian Quiptic 1,300 by Hectence", 2025),
+        post(3, "Guardian Cryptic 28,000 by Paul", 2021),
+    ]
+
+    assert len(load_clues(posts)) == 3
+    recent_cryptics = load_clues(posts, since=date(2023, 1, 1), full_cryptics_only=True)
+    assert [c.source_url for c in recent_cryptics] == ["https://p/1"]

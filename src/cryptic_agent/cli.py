@@ -9,6 +9,7 @@ import logging
 import sys
 import textwrap
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -141,15 +142,25 @@ def _solve(args: argparse.Namespace) -> int:
 
 
 def _evaluate(args: argparse.Namespace) -> int:
-    name = args.name or f"n{args.n}-seed{args.seed}-{args.strategy}" + (
-        f"-reveal{args.reveal_every}" if args.reveal_every else ""
+    name = (
+        args.name
+        or f"{args.category.replace('/', '_')}-n{args.n}-seed{args.seed}-{args.strategy}"
+        + (f"-reveal{args.reveal_every}" if args.reveal_every else "")
     )
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
-    posts_path = output_path(config.raw_dir(), "guardian/quick-cryptic")
+    posts_path = output_path(config.raw_dir(), args.category)
     if not posts_path.exists():
         print(f"error: no scraped clues at {posts_path}; run cryptic-agent scrape", file=sys.stderr)
         return 2
-    clues = sample_clues(load_clues(load_posts(posts_path)), args.n, args.seed)
+    clues = sample_clues(
+        load_clues(
+            load_posts(posts_path),
+            since=args.since,
+            full_cryptics_only=args.category == "guardian",
+        ),
+        args.n,
+        args.seed,
+    )
 
     if not args.report_only:
         try:
@@ -244,6 +255,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
     evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
+    evaluate.add_argument(
+        "--category",
+        default="guardian",
+        help="Scraped category to test on (default: guardian full cryptics, no Quiptic/Quick).",
+    )
+    evaluate.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        default=None,
+        help="Only puzzles from this date (YYYY-MM-DD), e.g. ones newer than the lexicon.",
+    )
     evaluate.add_argument("--seed", type=int, default=42, help="Seed for the sample.")
     evaluate.add_argument(
         "--name", default=None, help="Run name; results go to data/runs/<name>.jsonl."

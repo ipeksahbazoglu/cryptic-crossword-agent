@@ -17,13 +17,14 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
 from cryptic_agent.agent.solver import Solver, SolveResult
 from cryptic_agent.agent.tools import Toolbox
-from cryptic_agent.extraction.table_parser import ParsedClue, parse_clue_table
+from cryptic_agent.extraction.table_parser import ParsedClue, parse_clues
 from cryptic_agent.jsonl import append_jsonl, read_jsonl
 from cryptic_agent.llm.client import RateLimitedError
 from cryptic_agent.models import RawPost
@@ -60,11 +61,25 @@ def kind_of(clue: ParsedClue) -> str:
     return clue.type_hints[0] if len(clue.type_hints) == 1 else "unmarked"
 
 
-def load_clues(posts: Iterable[RawPost]) -> list[ParsedClue]:
-    """Every parsed clue, de-duplicated by key (a few posts repeat a clue)."""
+# Easier puzzle series, kept out of evaluations of full cryptics.
+EASY_SERIES = ("quiptic", "quick cryptic")
+
+
+def load_clues(
+    posts: Iterable[RawPost], *, since: date | None = None, full_cryptics_only: bool = False
+) -> list[ParsedClue]:
+    """Every parsed clue, de-duplicated by key (a few posts repeat a clue).
+
+    since: only puzzles published on or after this date.
+    full_cryptics_only: leave out the easier series (Quiptic, Quick Cryptic).
+    """
     clues: dict[str, ParsedClue] = {}
     for post in posts:
-        for clue in parse_clue_table(post):
+        if since and post.date.date() < since:
+            continue
+        if full_cryptics_only and any(s in post.title.lower() for s in EASY_SERIES):
+            continue
+        for clue in parse_clues(post):
             clues.setdefault(clue_key(clue), clue)
     return list(clues.values())
 
