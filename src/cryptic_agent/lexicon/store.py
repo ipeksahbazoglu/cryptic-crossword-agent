@@ -16,6 +16,8 @@ never lets the solver look up the very clue it is being tested on.
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
+from functools import cache
+from importlib import resources
 from pathlib import Path
 
 from cryptic_agent import config
@@ -46,6 +48,22 @@ class Evidence:
     value: str
     support: int
     curated: bool = False
+
+
+@cache
+def curated_indicators() -> dict[str, tuple[str, ...]]:
+    """Hand-checked indicators for mechanisms the mined data lacks (e.g. acrostics)."""
+    text = (
+        resources.files("cryptic_agent.lexicon")
+        .joinpath("data/indicators.tsv")
+        .read_text(encoding="utf-8")
+    )
+    found: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#"):
+            phrase, mechanism = line.split("\t")
+            found.setdefault(normalize_phrase(phrase), []).append(mechanism.strip())
+    return {phrase: tuple(mechanisms) for phrase, mechanisms in found.items()}
 
 
 def default_path() -> Path:
@@ -127,7 +145,13 @@ class Lexicon:
         ):
             name = WORDPLAY_NAMES.get(wordplay, wordplay)
             counts[name] = counts.get(name, 0) + n
-        return [Evidence(t, n) for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        mined = [Evidence(t, n) for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        curated = [
+            Evidence(mechanism, 0, curated=True)
+            for mechanism in curated_indicators().get(normalize_phrase(phrase), ())
+            if mechanism not in counts
+        ]
+        return mined + curated
 
     def extra_words(self) -> list[str]:
         """Words to add to the dictionary: well-attested past answers and repaired UKACD entries."""

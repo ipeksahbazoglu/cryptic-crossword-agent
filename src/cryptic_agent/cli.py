@@ -87,6 +87,8 @@ def _ingest(args: argparse.Namespace) -> int:
 def _print_step(step: Step) -> None:
     if step.kind == "fastpass":
         print(textwrap.indent(step.text, "  "))
+    elif step.kind == "tier":
+        print(f"-- {step.text}")
     elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
@@ -106,6 +108,7 @@ def _solve(args: argparse.Namespace) -> int:
         toolbox,
         on_step=None if args.quiet else _print_step,
         fast_pass=not args.no_fast_pass,
+        strategy=args.strategy,
     )
     print(f"Clue: {args.clue} ({args.enumeration})")
     result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
@@ -114,7 +117,8 @@ def _solve(args: argparse.Namespace) -> int:
         print(f"\nNo valid worksheet: {result.error}", file=sys.stderr)
         return 1
     verdict, worksheet = result.verdict, result.worksheet
-    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]")
+    tier = {0: "code only", 1: "one model call", 2: "the agent"}.get(result.tier or 0, "")
+    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]  (tier {result.tier}: {tier})")
     for d in worksheet.definitions:
         print(f"  definition: {d.text!r} ({d.position})")
     for w in worksheet.wordplay:
@@ -137,7 +141,7 @@ def _solve(args: argparse.Namespace) -> int:
 
 
 def _evaluate(args: argparse.Namespace) -> int:
-    name = args.name or f"n{args.n}-seed{args.seed}" + (
+    name = args.name or f"n{args.n}-seed{args.seed}-{args.strategy}" + (
         f"-reveal{args.reveal_every}" if args.reveal_every else ""
     )
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
@@ -166,7 +170,7 @@ def _evaluate(args: argparse.Namespace) -> int:
         try:
             run_evaluation(
                 clues,
-                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass),
+                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass, strategy=args.strategy),
                 toolbox,
                 out_path,
                 reveal_every=args.reveal_every,
@@ -230,6 +234,12 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
     )
+    solve.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
+    )
     solve.set_defaults(handler=_solve)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
@@ -249,6 +259,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
+    evaluate.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
     )
     evaluate.set_defaults(handler=_evaluate)
 

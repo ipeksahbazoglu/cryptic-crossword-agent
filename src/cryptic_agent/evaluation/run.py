@@ -49,6 +49,7 @@ class ResultRow(BaseModel):
     seconds: float
     pattern: str | None = None
     error: str = ""
+    tier: int | None = None  # 0 code only, 1 one model call, 2 the agent
 
 
 def clue_key(clue: ParsedClue) -> str:
@@ -110,6 +111,7 @@ def to_row(clue: ParsedClue, result: SolveResult, seconds: float, pattern: str |
         seconds=round(seconds, 1),
         pattern=pattern,
         error=result.error[:300],
+        tier=result.tier,
     )
 
 
@@ -154,6 +156,7 @@ class Summary:
     by_kind: dict[str, tuple[int, int]]
     confirmed_wrong: list[ResultRow]
     tokens: int
+    by_tier: dict[str, tuple[int, int, int]]  # tier -> (right, total, tokens)
 
 
 def summarise(rows: Sequence[ResultRow]) -> Summary:
@@ -171,7 +174,23 @@ def summarise(rows: Sequence[ResultRow]) -> Summary:
         by_kind=tally(lambda r: r.kind),
         confirmed_wrong=[r for r in rows if r.status == "confirmed" and not r.right],
         tokens=sum(r.tokens for r in rows),
+        by_tier={
+            label: (
+                sum(r.right for r in group),
+                len(group),
+                sum(r.tokens for r in group),
+            )
+            for label, group in _group_by_tier(rows).items()
+        },
     )
+
+
+def _group_by_tier(rows: Sequence[ResultRow]) -> dict[str, list[ResultRow]]:
+    labels = {0: "tier 0 (code)", 1: "tier 1 (one call)", 2: "tier 2 (agent)", None: "no tier"}
+    groups: dict[str, list[ResultRow]] = {}
+    for row in sorted(rows, key=lambda r: -1 if r.tier is None else r.tier):
+        groups.setdefault(labels.get(row.tier, f"tier {row.tier}"), []).append(row)
+    return groups
 
 
 def format_report(summary: Summary) -> str:
@@ -194,6 +213,12 @@ def format_report(summary: Summary) -> str:
         "",
         f"Tokens: {summary.tokens:,} ({summary.tokens // max(summary.total, 1):,} per clue)",
     ]
+    if any(label != "no tier" for label in summary.by_tier):
+        lines += ["", "By tier (answered there; tokens include earlier tiers):"]
+        for label, (right, total, tokens) in summary.by_tier.items():
+            lines.append(
+                f"  {label:<18} {pct(right, total)}  {tokens // max(total, 1):>6,} tokens/clue"
+            )
     return "\n".join(lines)
 
 

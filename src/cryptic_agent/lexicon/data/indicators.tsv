@@ -1,0 +1,43 @@
+# Hand-checked indicators for mechanisms the mined data has no category for.
+# The cryptics dataset labels anagram, container, deletion, hidden, homophone,
+# insertion, reversal and alternation indicators, but not acrostics.
+# Format: phrase <TAB> mechanism
+initially	acrostic
+first	acrostic
+first of	acrostic
+firstly	acrostic
+at first	acrostic
+at the outset	acrostic
+originally	acrostic
+primarily	acrostic
+principally	acrostic
+leaders	acrostic
+leaders of	acrostic
+leading	acrostic
+heads	acrostic
+heads of	acrostic
+headed	acrostic
+starters	acrostic
+for starters	acrostic
+starts	acrostic
+starts of	acrostic
+start of	acrostic
+openings	acrostic
+openings for	acrostic
+openers	acrostic
+initials	acrostic
+initial letters	acrostic
+first letters	acrostic
+beginnings	acrostic
+beginnings of	acrostic
+fronts	acrostic
+tips	acrostic
+tops	acrostic
+finally	acrostic
+lastly	acrostic
+ultimately	acrostic
+in the end	acrostic
+ends	acrostic
+ends of	acrostic
+endings	acrostic
+tails	acrostic
