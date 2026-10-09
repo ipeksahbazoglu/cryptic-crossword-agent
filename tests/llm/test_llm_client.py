@@ -11,6 +11,7 @@ from cryptic_agent.llm.client import (
     GroqClient,
     InvalidToolCallError,
     LLMError,
+    RateLimitedError,
     ScriptedLLM,
     StructuredOutputError,
     TokenBudget,
@@ -150,6 +151,20 @@ def test_other_api_errors_become_llm_errors() -> None:
     with pytest.raises(LLMError, match="bad model") as info:
         make_client(fake).complete([{"role": "user", "content": "x"}])
     assert not isinstance(info.value, (StructuredOutputError, InvalidToolCallError))
+
+
+def test_running_out_of_quota_is_its_own_error() -> None:
+    # Seen live: the free tier's 200,000 tokens/day, which no header reveals.
+    limited = httpx.Response(
+        429,
+        headers={"retry-after-ms": "1"},
+        json={"error": {"message": "Rate limit reached ... tokens per day (TPD): Limit 200000"}},
+    )
+    fake = FakeGroq(*[limited] * 6)  # the first try plus 5 SDK retries
+
+    with pytest.raises(RateLimitedError, match="tokens per day"):
+        make_client(fake).complete([{"role": "user", "content": "x"}])
+    assert len(fake.requests) == 6
 
 
 def test_reasoning_effort_is_sent_when_asked() -> None:
