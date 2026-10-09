@@ -6,6 +6,7 @@ import pytest
 
 from cryptic_agent.agent.verify import Verdict, matches_pattern, verify
 from cryptic_agent.agent.worksheet import Worksheet
+from cryptic_agent.lexicon.store import Lexicon
 from cryptic_agent.tools.dictionary import Dictionary
 
 DICTIONARY = Dictionary(["treason", "senator", "scrum", "pinch", "evergreen", "stand in", "bar"])
@@ -97,6 +98,97 @@ def test_unknown_word_is_not_confirmed() -> None:
     verdict = run(worksheet(answer="ATONERS", wordplay=[step]))
 
     assert verdict.status == "pencilled"  # letters fit, but not a dictionary word
+
+
+def test_a_word_cannot_have_two_roles() -> None:
+    step = worksheet().wordplay[0].model_copy(update={"fodder": "crime", "produces": "MERIC"})
+    ws = worksheet(answer="MERIC", wordplay=[step], link_words=["Senator"])
+
+    verdict = run(ws, enumeration="5")
+
+    role_check = next(c for c in verdict.checks if c.name == "every word has a role")
+    assert role_check.passed is False
+    assert "used more often than it appears: ['crime']" in role_check.detail
+
+
+def test_a_repeated_clue_word_needs_a_role_each_time() -> None:
+    verdict = run(worksheet(link_words=["in"]), clue="Senator in arranged in crime")
+
+    assert verdict.status == "pencilled"
+    assert "unexplained: ['in']" in verdict.failed()[0].detail
+
+
+def test_and_lit_may_use_every_word_twice() -> None:
+    # In an &lit clue the whole clue is the definition and also the wordplay.
+    ws = worksheet(definitions=[{"text": "Senator arranged crime", "position": "whole"}])
+    verdict = run(ws)
+
+    assert next(c for c in verdict.checks if c.name == "every word has a role").passed
+
+
+# --- when the wordplay fits several words, the definition must pick this one -----------
+
+ANAGRAMS = Dictionary(["eros", "ores", "roes", "sore", "rose"])
+
+
+def eros_sheet(answer: str) -> Worksheet:
+    return worksheet(
+        answer=answer,
+        definitions=[{"text": "Love god's", "position": "start"}],
+        wordplay=[
+            {
+                "mechanism": "anagram",
+                "indicator": "sparkling",
+                "fodder": "rose",
+                "produces": answer,
+                "explanation": "ROSE rearranged",
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [("EROS", "confirmed"), ("SORE", "pencilled"), ("ORES", "pencilled")],
+)
+def test_ambiguous_wordplay_needs_the_definition(
+    lexicon: Lexicon, answer: str, status: str
+) -> None:
+    # The miniature lexicon knows "Love god" -> EROS (and reads the 's as "is").
+    verdict = verify(
+        eros_sheet(answer), "Love god's sparkling rose", "4", ANAGRAMS, lexicon=lexicon
+    )
+
+    assert verdict.status == status
+
+
+def test_ambiguous_wordplay_without_a_lexicon_is_never_confirmed() -> None:
+    verdict = verify(eros_sheet("EROS"), "Love god's sparkling rose", "4", ANAGRAMS)
+
+    assert verdict.status == "pencilled"
+
+
+def test_excluded_puzzles_cannot_supply_the_definition(
+    lexicon: Lexicon, guardian_urls: list[str]
+) -> None:
+    # All three "Love god" clues hidden: nothing left to tie the definition to EROS.
+    verdict = verify(
+        eros_sheet("EROS"),
+        "Love god's sparkling rose",
+        "4",
+        ANAGRAMS,
+        lexicon=lexicon,
+        exclude_urls=[*guardian_urls, "https://times.example/1/"],
+    )
+
+    assert verdict.status == "pencilled"
+
+
+def test_unambiguous_wordplay_needs_no_lexicon() -> None:
+    verdict = run(worksheet())  # SENATOR has one anagram in this dictionary
+
+    assert verdict.status == "confirmed"
+    assert "definition means the answer" not in [c.name for c in verdict.checks]
 
 
 # --- things that make an answer unsure ------------------------------------------------

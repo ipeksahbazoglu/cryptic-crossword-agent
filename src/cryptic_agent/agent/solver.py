@@ -208,7 +208,15 @@ class Solver:
         steps: list[Step],
     ) -> Verdict:
         self._record(steps, Step("worksheet", text=json.dumps(worksheet.model_dump(), indent=1)))
-        return verify(worksheet, clue, enumeration, self.toolbox.dictionary, pattern=pattern)
+        return verify(
+            worksheet,
+            clue,
+            enumeration,
+            self.toolbox.dictionary,
+            pattern=pattern,
+            lexicon=self.toolbox.lexicon,
+            exclude_urls=self.toolbox.exclude_urls,
+        )
 
     def _solve(
         self,
@@ -238,7 +246,13 @@ class Solver:
         earlier = ""
         if self.strategy == "tiered" and found is not None:
             self._record(steps, Step("tier", text="tier 0: code only"))
-            by_code = solve_by_code(found, self.toolbox.dictionary, pattern=pattern)
+            by_code = solve_by_code(
+                found,
+                self.toolbox.dictionary,
+                self.toolbox.lexicon,
+                pattern=pattern,
+                exclude_urls=self.toolbox.exclude_urls,
+            )
             if by_code is not None:
                 sheet, _ = by_code
                 return result(sheet, self._verified(sheet, clue, enumeration, pattern, steps), 0)

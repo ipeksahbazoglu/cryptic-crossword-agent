@@ -1,7 +1,9 @@
 """The solving loop, driven by a scripted fake model: no network, no quota."""
 
+import copy
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -49,7 +51,7 @@ def text_reply(text: str) -> Completion:
 
 @pytest.fixture
 def toolbox(lexicon: Lexicon) -> Toolbox:
-    return Toolbox(Dictionary(["treason", "senator", "atoners"]), lexicon)
+    return Toolbox(Dictionary(["treason", "senator"]), lexicon)
 
 
 def test_tool_calls_are_run_and_results_sent_back(toolbox: Toolbox) -> None:
@@ -67,7 +69,7 @@ def test_tool_calls_are_run_and_results_sent_back(toolbox: Toolbox) -> None:
     assert result.verdict is not None and result.verdict.status == "confirmed"
     tool_message = llm.requests[1]["messages"][-1]
     assert tool_message["role"] == "tool" and tool_message["tool_call_id"] == "c1"
-    assert json.loads(tool_message["content"])["matches"] == ["ATONERS", "TREASON"]
+    assert json.loads(tool_message["content"])["matches"] == ["TREASON"]
     assert result.usage == Usage(300, 60)
 
 
@@ -263,7 +265,7 @@ def tier_toolbox(lexicon: Lexicon) -> Toolbox:
     return Toolbox(Dictionary(["eros", "ores", "roes", "sore", "rose"]), lexicon)
 
 
-EROS_WORKSHEET = {
+EROS_WORKSHEET: dict[str, Any] = {
     "answer": "EROS",
     "definitions": [{"text": "Love god's", "position": "start"}],
     "wordplay": [
@@ -292,17 +294,23 @@ def test_tier_0_solves_with_code_alone(tier_toolbox: Toolbox) -> None:
     assert llm.requests == []
 
 
-def test_ambiguous_code_solutions_go_to_the_model(tier_toolbox: Toolbox) -> None:
-    # "rose" also anagrams to ORES/ROES/SORE, but only EROS has definition evidence.
-    # With crossing letters ruling EROS out, code must not pick among the others.
-    ores_step = EROS_WORKSHEET["wordplay"][0] | {"produces": "ORES"}  # type: ignore[operator]
-    ores = EROS_WORKSHEET | {"answer": "ORES", "wordplay": [ores_step]}
-    llm = ScriptedLLM([text_reply(json.dumps(ores))])
+def test_an_answer_the_definition_does_not_support_is_never_confirmed(
+    tier_toolbox: Toolbox,
+) -> None:
+    # Crossing letters rule EROS out. ORES is a real anagram of "rose", but so are
+    # ROES and SORE, and nothing says "Love god" means ORES: every tier must refuse it.
+    ores = copy.deepcopy(EROS_WORKSHEET)
+    ores["answer"] = ores["wordplay"][0]["produces"] = "ORES"
+    llm = ScriptedLLM(
+        [text_reply(json.dumps(ores)), tool_reply(ToolCall("s1", "submit_answer", ores))]
+    )
 
     result = Solver(llm, tier_toolbox).solve("Love god's sparkling rose", "4", pattern="O???")
 
-    assert result.tier != 0
-    assert len(llm.requests) >= 1
+    assert result.tier == 2
+    assert result.verdict is not None and result.verdict.status == "pencilled"
+    meaning = next(c for c in result.verdict.checks if c.name == "definition means the answer")
+    assert meaning.passed is None and "ROES" in meaning.detail
 
 
 def test_tier_1_is_one_call_without_tools(toolbox: Toolbox) -> None:
