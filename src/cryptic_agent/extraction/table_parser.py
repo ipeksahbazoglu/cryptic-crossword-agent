@@ -119,13 +119,28 @@ def _merge_definition_spans(clue_text: str, spans: list[str]) -> list[str]:
 
 
 def type_hints_from(parsing: str) -> list[str]:
+    """Mechanisms the blogger names: in italics anywhere, or else as the opening words.
+
+    Many bloggers italicise the mechanism ("*anagram* of ..."); others start the
+    explanation with it in plain text ("An anagram (diverted) of ...", "Double
+    definition"). Plain-text names later in an explanation are ignored, since
+    they are often asides ("the anagram indicator fits the surface").
+    """
     hints: list[str] = []
     for phrase in _ITALIC.findall(parsing):
         words = normalize_phrase(phrase).removesuffix(" of")
         mapped = TYPE_HINT_WORDS.get(words) or TYPE_HINT_WORDS.get(phrase.strip().lower())
         if mapped and mapped not in hints:
             hints.append(mapped)
-    return hints
+    if hints:
+        return hints
+    opening = normalize_phrase(parsing).split()[:3]
+    if opening and opening[0] in ("a", "an"):
+        opening = opening[1:]
+    for size in (2, 1):
+        if mapped := TYPE_HINT_WORDS.get(" ".join(opening[:size])):
+            return [mapped]
+    return []
 
 
 def _setter_from(title: str) -> str | None:
@@ -144,20 +159,91 @@ def _parse_clue_cell(cell: str) -> tuple[str, str, str] | None:
     return clue_markup, enumeration, cell[enum.end() :].strip()
 
 
+_WHOLE_COLOR = re.compile(r"^\s*<color=[^>]+>(.*)</color>\s*$", re.S)
+
+
+def _unwrap_whole_clue_color(markup: str) -> str:
+    """Some bloggers colour the whole clue (not just the indicator): drop that wrapper.
+
+    'Quick Cryptic' posts colour only the indicator red; others wrap every clue in
+    blue. A colour around the entire clue says nothing about indicators.
+    """
+    match = _WHOLE_COLOR.match(markup)
+    if match and "</color>" not in match.group(1):
+        return match.group(1)
+    return markup
+
+
+def _indicator_spans(clue_markup: str, clue_text: str, definitions: list[str]) -> list[str]:
+    """Coloured spans that mark indicators, not the blogger colouring something else.
+
+    A colour covering the whole clue, or wrapping an underlined definition, is a
+    blogger's styling of the clue or its definition, not an indicator.
+    """
+    clue = normalize_phrase(clue_text)
+    defs = [normalize_phrase(d) for d in definitions]
+    return [
+        span
+        for span in _spans(_COLOR, clue_markup)
+        if normalize_phrase(span) != clue
+        and not any(d and f" {d} " in f" {normalize_phrase(span)} " for d in defs)
+    ]
+
+
+def _make_clue(
+    post: RawPost,
+    number: int,
+    direction: Literal["across", "down"] | None,
+    clue_markup: str,
+    enumeration: str,
+    answer: str,
+    parsing: str,
+) -> ParsedClue | None:
+    """One ParsedClue from its parts, or None if the answer contradicts the enumeration."""
+    clue_markup = _unwrap_whole_clue_color(clue_markup)
+    clue_text = strip_markup(clue_markup)
+    if not clue_text or len(normalize_answer(answer)) != sum(enumeration_lengths(enumeration)):
+        return None  # misread row (or a typo in the post): skip rather than guess
+    definitions = _merge_definition_spans(clue_text, _spans(_UNDERLINE, clue_markup))
+    return ParsedClue(
+        number=number,
+        direction=direction,
+        clue_markup=clue_markup,
+        clue_text=clue_text,
+        enumeration=enumeration,
+        answer=normalize_answer(answer),
+        definitions=definitions,
+        indicators=_indicator_spans(clue_markup, clue_text, definitions),
+        type_hints=type_hints_from(parsing),
+        parsing=strip_markup(parsing) if parsing else "",
+        source_url=post.url,
+        source_title=post.title,
+        setter=_setter_from(post.title),
+    )
+
+
+def _direction_header(text: str) -> Literal["across", "down"] | None:
+    """'ACROSS' / '**Across**' / '| | **DOWN** |' -> direction; clue lines -> None."""
+    plain = strip_markup(text).upper()
+    if re.search(r"\(\d", plain):
+        return None  # a clue that happens to contain the word
+    if re.fullmatch(r"\W*ACROSS\W*", plain) or re.search(r"\bACROSS\b", plain) and "|" in text:
+        return "across"
+    if re.fullmatch(r"\W*DOWN\W*", plain) or re.search(r"\bDOWN\b", plain) and "|" in text:
+        return "down"
+    return None
+
+
 def parse_clue_table(post: RawPost) -> list[ParsedClue]:
-    """All clues found in `post`'s tables that pass basic consistency checks."""
+    """Clues laid out as table rows: | number | clue (enum) | answer |, parsing below."""
     clues: list[ParsedClue] = []
     direction: Literal["across", "down"] | None = None
     lines = [line for line in post.content_markdown.splitlines() if line.startswith("|")]
 
     for i, line in enumerate(lines):
         cells = _cells(line)
-        header = strip_markup(" ".join(cells)).upper()
-        if re.search(r"\bACROSS\b", header) and not re.search(r"\(\d", header):
-            direction = "across"
-            continue
-        if re.search(r"\bDOWN\b", header) and not re.search(r"\(\d", header):
-            direction = "down"
+        if header := _direction_header(line):
+            direction = header
             continue
 
         number_match = re.match(r"^(\d+)", cells[0]) if cells else None
@@ -166,7 +252,7 @@ def parse_clue_table(post: RawPost) -> list[ParsedClue]:
 
         clue_part = answer = parsing = None
         for cell in cells[1:]:
-            if clue_part is None and (parsed := _parse_clue_cell(cell)):
+            if clue_part is None and (parsed := _parse_clue_cell(_unwrap_whole_clue_color(cell))):
                 clue_part = parsed
             elif answer is None and (m := _ANSWER_CELL.match(strip_markup(cell))):
                 answer = m.group(1)
@@ -180,25 +266,87 @@ def parse_clue_table(post: RawPost) -> list[ParsedClue]:
             parsing = next((c for c in nxt[1:] if c), "")
         parsing = re.sub(r"^Parsing\s+", "", parsing or "")
 
-        clue_text = strip_markup(clue_markup)
-        if len(normalize_answer(answer)) != sum(enumeration_lengths(enumeration)):
-            continue  # misread row (or a typo in the post): skip rather than guess
-
-        clues.append(
-            ParsedClue(
-                number=int(number_match.group(1)),
-                direction=direction,
-                clue_markup=clue_markup,
-                clue_text=clue_text,
-                enumeration=enumeration,
-                answer=normalize_answer(answer),
-                definitions=_merge_definition_spans(clue_text, _spans(_UNDERLINE, clue_markup)),
-                indicators=_spans(_COLOR, clue_markup),
-                type_hints=type_hints_from(parsing),
-                parsing=strip_markup(parsing) if parsing else "",
-                source_url=post.url,
-                source_title=post.title,
-                setter=_setter_from(post.title),
-            )
+        clue = _make_clue(
+            post,
+            int(number_match.group(1)),
+            direction,
+            clue_markup,
+            enumeration,
+            answer,
+            parsing,
         )
+        if clue is not None:
+            clues.append(clue)
     return clues
+
+
+# "12 Woo-hoo! Born during ... (7,3)", "18Confront ...", "1. Rubber bird ..." (after any
+# whole-clue colour is unwrapped)
+_CLUE_LINE = re.compile(r"^\s*(\d+)\.?(?:\s*[,/]\s*\d+)*\s*(?:[ad]\b)?\s*(.+)$", re.I)
+# "**WHEELIE BIN**" or "**SANDPAPER** : explanation" (matched with colour tags removed)
+_ANSWER_LINE = re.compile(r"^\s*\*\*([A-Z][A-Za-z' \-]*[A-Z])\s*\*\*\s*:?\s*(.*)$")
+_COLOR_TAG = re.compile(r"</?color[^>]*>")
+
+
+def _clue_line(line: str) -> re.Match[str] | None:
+    return _CLUE_LINE.match(_unwrap_whole_clue_color(line))
+
+
+def _answer_line(line: str) -> re.Match[str] | None:
+    return _ANSWER_LINE.match(_COLOR_TAG.sub("", line))
+
+
+def parse_clue_paragraphs(post: RawPost) -> list[ParsedClue]:
+    """Clues laid out as paragraphs: clue line, then **ANSWER**, then the explanation.
+
+    1 <u>Starch</u> silly person dropped into sparkling wine (7)
+    **CASSAVA**
+    ASS (silly person) in CAVA (sparkling wine)
+    """
+    clues: list[ParsedClue] = []
+    direction: Literal["across", "down"] | None = None
+    lines = [line for line in post.content_markdown.splitlines() if line.strip()]
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if header := _direction_header(line):
+            direction = header
+            i += 1
+            continue
+        clue_line = _clue_line(line)
+        answer_line = _answer_line(lines[i + 1]) if i + 1 < len(lines) else None
+        parsed = (
+            _parse_clue_cell(_unwrap_whole_clue_color(clue_line.group(2))) if clue_line else None
+        )
+        if clue_line is None or answer_line is None or parsed is None:
+            i += 1
+            continue
+
+        explanation = [answer_line.group(2)] if answer_line.group(2) else []
+        j = i + 2
+        while j < len(lines) and not _direction_header(lines[j]):
+            if _clue_line(lines[j]) and j + 1 < len(lines) and _answer_line(lines[j + 1]):
+                break  # the next clue starts
+            explanation.append(lines[j])
+            j += 1
+
+        clue_markup, enumeration, _ = parsed
+        clue = _make_clue(
+            post,
+            int(clue_line.group(1)),
+            direction,
+            clue_markup,
+            enumeration,
+            answer_line.group(1),
+            " ".join(explanation),
+        )
+        if clue is not None:
+            clues.append(clue)
+        i = j
+    return clues
+
+
+def parse_clues(post: RawPost) -> list[ParsedClue]:
+    """Every clue in a post, whichever layout the blogger used."""
+    return parse_clue_table(post) or parse_clue_paragraphs(post)

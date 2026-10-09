@@ -56,6 +56,7 @@ class WordplayHit:
     fodder: str
     span: Span
     indicator: str | None  # a neighbouring phrase the lexicon knows signals this mechanism
+    indicator_span: Span | None = None
 
 
 @dataclass
@@ -101,7 +102,7 @@ class FastPass:
         return "\n".join(lines)
 
 
-def _words(clue: str) -> list[str]:
+def clue_words(clue: str) -> list[str]:
     return [w for w in clue.split() if normalize_answer(w)]
 
 
@@ -147,7 +148,7 @@ def _definition_hits(
 
 def _indicator_near(
     words: list[str], span: Span, mechanism: str, lexicon: Lexicon, exclude_urls: Collection[str]
-) -> str | None:
+) -> tuple[str, Span] | None:
     """A phrase right before or after `span` that has signalled `mechanism` before."""
     for size in range(MAX_INDICATOR_WORDS, 0, -1):
         for start in (span.start - size, span.end):
@@ -157,7 +158,7 @@ def _indicator_near(
             text = _phrase(words, near).strip(",.;:!?'\"")
             types = lexicon.indicator_types(text, exclude_urls=exclude_urls)
             if any(e.value == mechanism for e in types):
-                return text
+                return text, near
     return None
 
 
@@ -175,8 +176,9 @@ def _wordplay_hits(
     def hit(answer: str, mechanism: str, span: Span) -> WordplayHit | None:
         if not _fits(dictionary, answer, enumeration, pattern):
             return None
-        indicator = _indicator_near(words, span, mechanism, lexicon, exclude_urls)
-        return WordplayHit(answer, mechanism, _phrase(words, span), span, indicator)
+        found = _indicator_near(words, span, mechanism, lexicon, exclude_urls)
+        indicator, indicator_span = found if found else (None, None)
+        return WordplayHit(answer, mechanism, _phrase(words, span), span, indicator, indicator_span)
 
     for start in range(n):
         for end in range(start + 1, n + 1):
@@ -232,7 +234,7 @@ def fast_pass(
     pattern: str | None = None,
     exclude_urls: Collection[str] = (),
 ) -> FastPass:
-    words = _words(clue)
+    words = clue_words(clue)
     length = sum(enumeration_lengths(enumeration))
     candidates: dict[str, Candidate] = {}
 
