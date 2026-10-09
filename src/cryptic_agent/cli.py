@@ -41,11 +41,6 @@ from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
 Handler = Callable[[argparse.Namespace], int]
 
 
-def _not_implemented(args: argparse.Namespace) -> int:
-    print(f"'{args.command}' is not implemented yet.", file=sys.stderr)
-    return 1
-
-
 def _scrape(args: argparse.Namespace) -> int:
     out_path = args.output or output_path(config.raw_dir(), args.category)
     try:
@@ -210,7 +205,7 @@ def _evaluate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
-        description="Scrape, extract, solve and evaluate UK cryptic crossword clues.",
+        description="Scrape, solve and evaluate UK cryptic crossword clues.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -232,12 +227,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only this source (repeatable). Default: all.",
     )
     ingest.set_defaults(handler=_ingest)
-
-    extract = subparsers.add_parser("extract", help="Turn raw posts into structured clues.")
-    extract.add_argument("--input", type=Path, default=None, help="Raw posts directory.")
-    extract.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
-    extract.add_argument("--limit", type=int, default=None, help="Max posts to process.")
-    extract.set_defaults(handler=_not_implemented)
 
     solve = subparsers.add_parser("solve", help="Solve a single clue.")
     solve.add_argument("--clue", required=True, help="Clue text without the enumeration.")
