@@ -23,7 +23,7 @@ def test_help_lists_all_commands(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
-    for command in ("scrape", "extract", "solve", "eval"):
+    for command in ("scrape", "ingest", "solve", "eval"):
         assert command in out
 
 
@@ -32,19 +32,6 @@ def test_no_command_is_a_usage_error() -> None:
         cli.main([])
 
     assert exc_info.value.code == 2
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["extract"],
-    ],
-)
-def test_stub_commands_parse_and_report_not_implemented(
-    argv: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert cli.main(argv) == 1
-    assert "not implemented" in capsys.readouterr().err
 
 
 def test_parser_applies_types_and_defaults() -> None:
@@ -65,9 +52,9 @@ def test_missing_api_key_is_reported_without_traceback(
 
     monkeypatch.delenv(config.API_KEY_ENV_VAR, raising=False)
     # Stand in for a real command that needs the key.
-    monkeypatch.setattr(cli, "_not_implemented", needs_key)
+    monkeypatch.setattr(cli, "_solve", needs_key)
 
-    assert cli.main(["extract"]) == 2
+    assert cli.main(["solve", "--clue", "Senator arranged crime", "--enumeration", "7"]) == 2
     assert f"{config.API_KEY_ENV_VAR} is not set" in capsys.readouterr().err
 
 
@@ -130,3 +117,20 @@ def test_ingest_without_big_sources_skips_the_lexicon_build(
     out = capsys.readouterr().out
     assert "ukacd:" in out
     assert "lexicon not built" in out
+
+
+def test_eval_runs_with_different_settings_get_different_files() -> None:
+    def name(*flags: str) -> str:
+        return cli._run_name(cli.build_parser().parse_args(["eval", *flags]))
+
+    names = {
+        name(),
+        name("--no-fast-pass"),
+        name("--strategy", "agent"),
+        name("--reveal-every", "2"),
+        name("--n", "30"),
+        name("--seed", "7"),
+    }
+
+    assert len(names) == 6  # no two runs share a results file
+    assert name("--name", "mine", "--no-fast-pass") == "mine"

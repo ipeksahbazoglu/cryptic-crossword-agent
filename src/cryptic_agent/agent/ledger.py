@@ -10,13 +10,9 @@ hidden reasoning and its visible answer:
     answer     what it actually said: tool requests or the worksheet
 """
 
-import json
 from dataclasses import dataclass
 
-from cryptic_agent.agent.solver import SUBMIT_TOOL, SYSTEM_PROMPT, SolveResult
-from cryptic_agent.agent.tools import Toolbox
-
-CHARS_PER_TOKEN = 4  # a rough rule of thumb for English text and JSON
+from cryptic_agent.agent.solver import SolveResult
 
 
 @dataclass(frozen=True)
@@ -54,10 +50,12 @@ def ledger(result: SolveResult) -> list[LedgerRow]:
                 step=step.text,
                 sent=usage.prompt_tokens,
                 reasoning=usage.reasoning_tokens,
-                answer=usage.completion_tokens - usage.reasoning_tokens,
+                answer=usage.answer_tokens,
                 total=usage.total_tokens,
                 running_total=running,
-                did=", ".join(after) or "replied in words",
+                did="rejected by the provider (cost not reported)"
+                if step.text.endswith("rejected")
+                else ", ".join(after) or "replied in words",
             )
         )
     return rows
@@ -75,22 +73,9 @@ def format_ledger(result: SolveResult) -> str:
         for r in rows
     ]
     usage = result.usage
-    answer = usage.completion_tokens - usage.reasoning_tokens
     lines += [
         "-" * len(header),
-        f"{'total':<34}{usage.prompt_tokens:>7,}{usage.reasoning_tokens:>11,}{answer:>8,}"
+        f"{'total':<34}{usage.prompt_tokens:>7,}{usage.reasoning_tokens:>11,}{usage.answer_tokens:>8,}"
         f"{usage.total_tokens:>8,}",
     ]
     return "\n".join(lines)
-
-
-def request_overhead(toolbox: Toolbox) -> dict[str, int]:
-    """Roughly how many tokens every tier-2 request carries before any conversation.
-
-    These are re-sent with every round, so they multiply by the number of rounds.
-    """
-    tools = json.dumps([*toolbox.specs(), SUBMIT_TOOL])
-    return {
-        "instructions": len(SYSTEM_PROMPT) // CHARS_PER_TOKEN,
-        "tool descriptions": len(tools) // CHARS_PER_TOKEN,
-    }

@@ -37,5 +37,4 @@ def test_indicator_frequencies(lexicon: Lexicon) -> None:
 
 
 def test_words_newer_than_ukacd_are_known(lexicon: Lexicon) -> None:
-    assert lexicon.is_known_answer("SELFIE")
-    assert lexicon.is_known_answer("PRECIS")
+    assert {"SELFIE", "PRECIS"} <= set(lexicon.extra_words())

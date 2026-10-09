@@ -15,7 +15,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
-from cryptic_agent.agent.ledger import format_ledger, request_overhead
+from cryptic_agent.agent.ledger import format_ledger
 from cryptic_agent.agent.solver import Solver, Step
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.evaluation.run import (
@@ -39,11 +39,6 @@ from cryptic_agent.scraper.scrape import output_path, scrape_category
 from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
 
 Handler = Callable[[argparse.Namespace], int]
-
-
-def _not_implemented(args: argparse.Namespace) -> int:
-    print(f"'{args.command}' is not implemented yet.", file=sys.stderr)
-    return 1
 
 
 def _scrape(args: argparse.Namespace) -> int:
@@ -91,12 +86,6 @@ def _print_step(step: Step) -> None:
         print(textwrap.indent(step.text, "  "))
     elif step.kind == "tier":
         print(f"-- {step.text}")
-    elif step.kind == "call" and step.usage:
-        u = step.usage
-        print(
-            f"  [{step.text}: sent {u.prompt_tokens:,}, reasoning {u.reasoning_tokens:,}, "
-            f"answer {u.completion_tokens - u.reasoning_tokens:,} tokens]"
-        )
     elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
@@ -144,11 +133,6 @@ def _solve(args: argparse.Namespace) -> int:
     if args.tokens:
         print("\ntokens, call by call:")
         print(textwrap.indent(format_ledger(result), "  "))
-        overhead = request_overhead(toolbox)
-        print(
-            "  every tier-2 request also re-sends about "
-            + " + ".join(f"{n:,} tokens of {what}" for what, n in overhead.items())
-        )
     print(
         f"cost: {llm.totals.requests} requests, {result.usage.total_tokens:,} tokens, "
         f"waited {llm.totals.waited_seconds:.0f}s for rate limits"
@@ -156,12 +140,22 @@ def _solve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _evaluate(args: argparse.Namespace) -> int:
-    name = (
+def _run_name(args: argparse.Namespace) -> str:
+    """The results file name for an eval run.
+
+    Every flag that changes how clues are solved must be in the name, or a second
+    run finds the first run's rows and reports them as its own.
+    """
+    return (
         args.name
         or f"{args.category.replace('/', '_')}-n{args.n}-seed{args.seed}-{args.strategy}"
         + (f"-reveal{args.reveal_every}" if args.reveal_every else "")
+        + ("-nofastpass" if args.no_fast_pass else "")
     )
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    name = _run_name(args)
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
     posts_path = output_path(config.raw_dir(), args.category)
     if not posts_path.exists():
@@ -221,7 +215,7 @@ def _evaluate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
-        description="Scrape, extract, solve and evaluate UK cryptic crossword clues.",
+        description="Scrape, solve and evaluate UK cryptic crossword clues.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -243,12 +237,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only this source (repeatable). Default: all.",
     )
     ingest.set_defaults(handler=_ingest)
-
-    extract = subparsers.add_parser("extract", help="Turn raw posts into structured clues.")
-    extract.add_argument("--input", type=Path, default=None, help="Raw posts directory.")
-    extract.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
-    extract.add_argument("--limit", type=int, default=None, help="Max posts to process.")
-    extract.set_defaults(handler=_not_implemented)
 
     solve = subparsers.add_parser("solve", help="Solve a single clue.")
     solve.add_argument("--clue", required=True, help="Clue text without the enumeration.")
