@@ -117,3 +117,20 @@ def test_ingest_without_big_sources_skips_the_lexicon_build(
     out = capsys.readouterr().out
     assert "ukacd:" in out
     assert "lexicon not built" in out
+
+
+def test_eval_runs_with_different_settings_get_different_files() -> None:
+    def name(*flags: str) -> str:
+        return cli._run_name(cli.build_parser().parse_args(["eval", *flags]))
+
+    names = {
+        name(),
+        name("--no-fast-pass"),
+        name("--strategy", "agent"),
+        name("--reveal-every", "2"),
+        name("--n", "30"),
+        name("--seed", "7"),
+    }
+
+    assert len(names) == 6  # no two runs share a results file
+    assert name("--name", "mine", "--no-fast-pass") == "mine"

@@ -140,12 +140,22 @@ def _solve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _evaluate(args: argparse.Namespace) -> int:
-    name = (
+def _run_name(args: argparse.Namespace) -> str:
+    """The results file name for an eval run.
+
+    Every flag that changes how clues are solved must be in the name, or a second
+    run finds the first run's rows and reports them as its own.
+    """
+    return (
         args.name
         or f"{args.category.replace('/', '_')}-n{args.n}-seed{args.seed}-{args.strategy}"
         + (f"-reveal{args.reveal_every}" if args.reveal_every else "")
+        + ("-nofastpass" if args.no_fast_pass else "")
     )
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    name = _run_name(args)
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
     posts_path = output_path(config.raw_dir(), args.category)
     if not posts_path.exists():

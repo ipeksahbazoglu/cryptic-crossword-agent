@@ -363,3 +363,35 @@ def test_an_invalid_submission_is_sent_back_to_fix(toolbox: Toolbox) -> None:
 
     assert result.answer == "TREASON"
     assert "fix and resubmit" in llm.requests[1]["messages"][-1]["content"]
+
+
+def test_tier_1_is_skipped_when_code_found_no_wordplay(toolbox: Toolbox) -> None:
+    # Nothing in "Quiet dog barks" anagrams, hides or spells a 5-letter word here,
+    # so a one-shot call would have nothing to build on: go straight to the agent.
+    llm = ScriptedLLM([tool_reply(ToolCall("s1", "submit_answer", WORKSHEET))])
+
+    result = Solver(llm, toolbox).solve("Quiet dog barks", "5")
+
+    assert result.tier == 2
+    assert len(llm.requests) == 1 and llm.requests[0]["tools"] is not None
+    assert [s.text for s in result.steps if s.kind == "tier"] == [
+        "tier 0: code only",
+        "tier 2: the agent with tools",
+    ]
+
+
+def test_a_repeated_tool_call_is_answered_with_a_nudge_not_run_again(toolbox: Toolbox) -> None:
+    same = {"text": "strap"}
+    llm = ScriptedLLM(
+        [
+            tool_reply(ToolCall("c1", "reverse_letters", same)),
+            tool_reply(ToolCall("c2", "reverse_letters", same)),
+            tool_reply(ToolCall("s1", "submit_answer", WORKSHEET)),
+        ]
+    )
+
+    result = Solver(llm, toolbox, strategy="agent").solve("Senator arranged crime", "7")
+
+    first, second = [s.result for s in result.steps if s.kind == "tool"]
+    assert "PARTS" in first
+    assert "already made exactly this call" in second and "PARTS" not in second

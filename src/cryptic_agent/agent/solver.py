@@ -107,6 +107,11 @@ RETRY_WORKSHEET_PROMPT = """\
 Your worksheet could not be read. Reply with ONLY the JSON worksheet, keeping any
 thinking very short."""
 
+REPEATED_CALL_NOTE = (
+    "You already made exactly this call and the result has not changed. Try a different "
+    "tool, different words, or the other end of the clue, or submit your best answer."
+)
+
 SUBMIT_TOOL = {
     "type": "function",
     "function": {
@@ -257,8 +262,12 @@ class Solver:
                 sheet, _ = by_code
                 return result(sheet, self._verified(sheet, clue, enumeration, pattern, steps), 0)
 
-            self._record(steps, Step("tier", text="tier 1: one model call"))
-            sheet1 = self._quick_worksheet(clue, enumeration, pattern, found, steps, tally)
+            # One call only pays off when code found some wordplay to build on.
+            # Measured without it: about 4,500 tokens per hard clue, nothing confirmed.
+            sheet1 = None
+            if any(c.wordplay for c in found.candidates):
+                self._record(steps, Step("tier", text="tier 1: one model call"))
+                sheet1 = self._quick_worksheet(clue, enumeration, pattern, found, steps, tally)
             if sheet1 is not None:
                 verdict1 = self._verified(sheet1, clue, enumeration, pattern, steps)
                 if verdict1.status == "confirmed":
@@ -360,6 +369,7 @@ class Solver:
             {"role": "user", "content": user_prompt + earlier},
         ]
         tools = [*self.toolbox.specs(), SUBMIT_TOOL]
+        asked: set[str] = set()  # tool calls already made in this solve
 
         for round_number in range(1, self.max_rounds + 1):
             try:
@@ -386,7 +396,11 @@ class Solver:
                         output = json.dumps(
                             {"error": f"worksheet invalid, fix and resubmit: {exc}"}
                         )
+                elif (question := call.name + json.dumps(call.arguments, sort_keys=True)) in asked:
+                    # Seen live: the same check_hidden_word call four times in one solve.
+                    output = json.dumps({"note": REPEATED_CALL_NOTE})
                 else:
+                    asked.add(question)
                     output = self.toolbox.run(call.name, call.arguments)[:MAX_RESULT_CHARS]
                 self._record(
                     steps, Step("tool", tool=call.name, arguments=call.arguments, result=output)
