@@ -181,6 +181,7 @@ def test_reasoning_tokens_are_read_from_the_response() -> None:
     )
 
     assert reply.usage == Usage(prompt_tokens=90, completion_tokens=80, reasoning_tokens=69)
+    assert reply.usage.answer_tokens == 11
 
 
 def test_reasoning_effort_is_sent_when_asked() -> None:

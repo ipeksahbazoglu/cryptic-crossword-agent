@@ -292,6 +292,13 @@ class Solver:
         tally.add(reply)
         self._record(steps, Step("call", text=label, usage=reply.usage))
 
+    def _rejected(self, label: str, steps: list[Step]) -> None:
+        """Log a call the provider rejected, so the ledger shows it happened.
+
+        The error reply carries no token count, so its cost is recorded as unknown (0).
+        """
+        self._record(steps, Step("call", text=f"{label}, rejected", usage=Usage()))
+
     def _request_worksheet(
         self, messages: list[Message], label: str, steps: list[Step], tally: _Tally
     ) -> Worksheet | None:
@@ -303,6 +310,7 @@ class Solver:
                 )
             except (StructuredOutputError, InvalidToolCallError) as exc:
                 logger.warning("worksheet attempt %d (%s effort) failed: %s", attempt, effort, exc)
+                self._rejected(f"{label} ({effort} effort)", steps)
                 if attempt == 1:
                     messages.append({"role": "user", "content": RETRY_WORKSHEET_PROMPT})
                 continue
@@ -358,6 +366,7 @@ class Solver:
                 reply = self.llm.complete(messages, tools=tools)
             except InvalidToolCallError as exc:
                 note = f"That tool call was rejected ({exc}). Use only the tools provided."
+                self._rejected(f"tier 2: round {round_number}", steps)
                 self._record(steps, Step("thought", text=f"[invalid tool call] {exc}"))
                 messages.append({"role": "user", "content": note})
                 continue

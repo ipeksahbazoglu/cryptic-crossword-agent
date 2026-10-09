@@ -15,7 +15,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
-from cryptic_agent.agent.ledger import format_ledger, request_overhead
+from cryptic_agent.agent.ledger import format_ledger
 from cryptic_agent.agent.solver import Solver, Step
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.evaluation.run import (
@@ -91,12 +91,6 @@ def _print_step(step: Step) -> None:
         print(textwrap.indent(step.text, "  "))
     elif step.kind == "tier":
         print(f"-- {step.text}")
-    elif step.kind == "call" and step.usage:
-        u = step.usage
-        print(
-            f"  [{step.text}: sent {u.prompt_tokens:,}, reasoning {u.reasoning_tokens:,}, "
-            f"answer {u.completion_tokens - u.reasoning_tokens:,} tokens]"
-        )
     elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
@@ -144,11 +138,6 @@ def _solve(args: argparse.Namespace) -> int:
     if args.tokens:
         print("\ntokens, call by call:")
         print(textwrap.indent(format_ledger(result), "  "))
-        overhead = request_overhead(toolbox)
-        print(
-            "  every tier-2 request also re-sends about "
-            + " + ".join(f"{n:,} tokens of {what}" for what, n in overhead.items())
-        )
     print(
         f"cost: {llm.totals.requests} requests, {result.usage.total_tokens:,} tokens, "
         f"waited {llm.totals.waited_seconds:.0f}s for rate limits"

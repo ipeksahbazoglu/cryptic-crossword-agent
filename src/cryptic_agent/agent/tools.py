@@ -164,7 +164,7 @@ class Toolbox:
         else:
             try:
                 result = tool.function(**arguments)
-            except (TypeError, ValueError) as exc:
+            except Exception as exc:  # the model wrote the arguments: anything can arrive
                 result = {"error": f"{type(exc).__name__}: {exc}"}
         return json.dumps(result, separators=(",", ":"))
 

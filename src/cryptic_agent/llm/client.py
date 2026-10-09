@@ -47,6 +47,11 @@ class Usage:
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
+    @property
+    def answer_tokens(self) -> int:
+        """What the model visibly wrote: its output minus its hidden reasoning."""
+        return self.completion_tokens - self.reasoning_tokens
+
 
 @dataclass(frozen=True)
 class Completion:
