@@ -81,6 +81,22 @@ def test_iter_posts_respects_max_pages() -> None:
 
 
 @responses.activate
+def test_iter_posts_without_max_pages_reads_to_the_end() -> None:
+    responses.get(f"{BASE_URL}/posts", json=[{"id": 1}], headers={"X-WP-TotalPages": "3"})
+
+    assert len(list(make_client().iter_posts(56, max_pages=None))) == 3
+
+
+@responses.activate
+def test_iter_posts_fetches_lazily() -> None:
+    responses.get(f"{BASE_URL}/posts", json=[{"id": 1}], headers={"X-WP-TotalPages": "69"})
+
+    next(make_client().iter_posts(56, max_pages=None))
+
+    assert len(responses.calls) == 1  # a caller that stops early costs no more pages
+
+
+@responses.activate
 def test_iter_posts_stops_on_400_past_last_page() -> None:
     responses.get(f"{BASE_URL}/posts", status=400, json={"code": "rest_post_invalid_page_number"})
 

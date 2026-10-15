@@ -21,18 +21,13 @@ class MissingAPIKeyError(RuntimeError):
 
 
 def data_dir() -> Path:
-    """Root directory for scraped and processed data (default: ./data)."""
+    """Root directory for scraped posts, the lexicon and evaluation runs (default: ./data)."""
     return Path(os.environ.get(DATA_DIR_ENV_VAR, "data"))
 
 
 def raw_dir() -> Path:
     """Where the scraper writes raw posts, one .jsonl file per category."""
     return data_dir() / "raw"
-
-
-def processed_dir() -> Path:
-    """Where extraction writes structured clue records."""
-    return data_dir() / "processed"
 
 
 def lexicon_dir() -> Path:

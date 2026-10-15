@@ -9,11 +9,14 @@ import logging
 import sys
 import textwrap
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 
+import requests
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
+from cryptic_agent.agent.ledger import format_ledger
 from cryptic_agent.agent.solver import Solver, Step
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.evaluation.run import (
@@ -39,18 +42,13 @@ from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
 Handler = Callable[[argparse.Namespace], int]
 
 
-def _not_implemented(args: argparse.Namespace) -> int:
-    print(f"'{args.command}' is not implemented yet.", file=sys.stderr)
-    return 1
-
-
 def _scrape(args: argparse.Namespace) -> int:
     out_path = args.output or output_path(config.raw_dir(), args.category)
     try:
         summary = scrape_category(
             WordPressClient(), args.category, max_pages=args.pages, out_path=out_path
         )
-    except CategoryNotFoundError as exc:
+    except (CategoryNotFoundError, requests.RequestException) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(
@@ -87,6 +85,8 @@ def _ingest(args: argparse.Namespace) -> int:
 def _print_step(step: Step) -> None:
     if step.kind == "fastpass":
         print(textwrap.indent(step.text, "  "))
+    elif step.kind == "tier":
+        print(f"-- {step.text}")
     elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
@@ -106,6 +106,7 @@ def _solve(args: argparse.Namespace) -> int:
         toolbox,
         on_step=None if args.quiet else _print_step,
         fast_pass=not args.no_fast_pass,
+        strategy=args.strategy,
     )
     print(f"Clue: {args.clue} ({args.enumeration})")
     result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
@@ -114,7 +115,8 @@ def _solve(args: argparse.Namespace) -> int:
         print(f"\nNo valid worksheet: {result.error}", file=sys.stderr)
         return 1
     verdict, worksheet = result.verdict, result.worksheet
-    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]")
+    tier = {0: "code only", 1: "one model call", 2: "the agent"}.get(result.tier or 0, "")
+    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]  (tier {result.tier}: {tier})")
     for d in worksheet.definitions:
         print(f"  definition: {d.text!r} ({d.position})")
     for w in worksheet.wordplay:
@@ -129,6 +131,9 @@ def _solve(args: argparse.Namespace) -> int:
     for c in verdict.checks:
         mark = {True: "ok", False: "FAIL", None: "?"}[c.passed]
         print(f"  [{mark:>4}] {c.name}: {c.detail}")
+    if args.tokens:
+        print("\ntokens, call by call:")
+        print(textwrap.indent(format_ledger(result), "  "))
     print(
         f"cost: {llm.totals.requests} requests, {result.usage.total_tokens:,} tokens, "
         f"waited {llm.totals.waited_seconds:.0f}s for rate limits"
@@ -136,16 +141,36 @@ def _solve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _evaluate(args: argparse.Namespace) -> int:
-    name = args.name or f"n{args.n}-seed{args.seed}" + (
-        f"-reveal{args.reveal_every}" if args.reveal_every else ""
+def _run_name(args: argparse.Namespace) -> str:
+    """The results file name for an eval run.
+
+    Every flag that changes how clues are solved must be in the name, or a second
+    run finds the first run's rows and reports them as its own.
+    """
+    return (
+        args.name
+        or f"{args.category.replace('/', '_')}-n{args.n}-seed{args.seed}-{args.strategy}"
+        + (f"-reveal{args.reveal_every}" if args.reveal_every else "")
+        + ("-nofastpass" if args.no_fast_pass else "")
     )
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    name = _run_name(args)
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
-    posts_path = output_path(config.raw_dir(), "guardian/quick-cryptic")
+    posts_path = output_path(config.raw_dir(), args.category)
     if not posts_path.exists():
         print(f"error: no scraped clues at {posts_path}; run cryptic-agent scrape", file=sys.stderr)
         return 2
-    clues = sample_clues(load_clues(load_posts(posts_path)), args.n, args.seed)
+    clues = sample_clues(
+        load_clues(
+            load_posts(posts_path),
+            since=args.since,
+            full_cryptics_only=args.category == "guardian",
+        ),
+        args.n,
+        args.seed,
+    )
 
     if not args.report_only:
         try:
@@ -166,7 +191,7 @@ def _evaluate(args: argparse.Namespace) -> int:
         try:
             run_evaluation(
                 clues,
-                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass),
+                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass, strategy=args.strategy),
                 toolbox,
                 out_path,
                 reveal_every=args.reveal_every,
@@ -191,7 +216,7 @@ def _evaluate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
-        description="Scrape, extract, solve and evaluate UK cryptic crossword clues.",
+        description="Scrape, solve and evaluate UK cryptic crossword clues.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -200,7 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--category", required=True, help="Category slug, e.g. 'guardian/quick-cryptic'."
     )
     scrape.add_argument(
-        "--pages", type=int, default=1, help=f"Pages to fetch, newest first ({MAX_PER_PAGE} each)."
+        "--pages",
+        type=int,
+        default=None,
+        help=f"Pages to fetch, newest first ({MAX_PER_PAGE} each). "
+        "Default: until reaching posts already saved (all of them on the first run).",
     )
     scrape.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
     scrape.set_defaults(handler=_scrape)
@@ -214,12 +243,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.set_defaults(handler=_ingest)
 
-    extract = subparsers.add_parser("extract", help="Turn raw posts into structured clues.")
-    extract.add_argument("--input", type=Path, default=None, help="Raw posts directory.")
-    extract.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
-    extract.add_argument("--limit", type=int, default=None, help="Max posts to process.")
-    extract.set_defaults(handler=_not_implemented)
-
     solve = subparsers.add_parser("solve", help="Solve a single clue.")
     solve.add_argument("--clue", required=True, help="Clue text without the enumeration.")
     solve.add_argument("--enumeration", required=True, help="Answer lengths, e.g. '7' or '3,4'.")
@@ -228,12 +251,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     solve.add_argument("--quiet", action="store_true", help="Only print the verdict.")
     solve.add_argument(
+        "--tokens", action="store_true", help="Show a call-by-call ledger of tokens used."
+    )
+    solve.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
+    solve.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
     )
     solve.set_defaults(handler=_solve)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
     evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
+    evaluate.add_argument(
+        "--category",
+        default="guardian",
+        help="Scraped category to test on (default: guardian full cryptics, no Quiptic/Quick).",
+    )
+    evaluate.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        default=None,
+        help="Only puzzles from this date (YYYY-MM-DD), e.g. ones newer than the lexicon.",
+    )
     evaluate.add_argument("--seed", type=int, default=42, help="Seed for the sample.")
     evaluate.add_argument(
         "--name", default=None, help="Run name; results go to data/runs/<name>.jsonl."
@@ -249,6 +292,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
+    evaluate.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
     )
     evaluate.set_defaults(handler=_evaluate)
 

@@ -13,20 +13,23 @@ convention from a one-off:
 never lets the solver look up the very clue it is being tested on.
 """
 
+import re
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
+from functools import cache
+from importlib import resources
 from pathlib import Path
 
 from cryptic_agent import config
-from cryptic_agent.models import normalize_answer, normalize_phrase
+from cryptic_agent.models import normalize_phrase
 
 
 class LexiconNotFoundError(RuntimeError):
     """The lexicon database has not been built yet."""
 
 
-# The cryptics dataset's mechanism names -> ours (models.ComponentType).
+# The cryptics dataset's mechanism names -> ours (see agent/worksheet.py Mechanism).
 WORDPLAY_NAMES = {
     "anagram": "anagram",
     "container": "container",
@@ -48,6 +51,38 @@ class Evidence:
     curated: bool = False
 
 
+@cache
+def curated_indicators() -> dict[str, tuple[str, ...]]:
+    """Hand-checked indicators for mechanisms the mined data lacks (e.g. acrostics)."""
+    text = (
+        resources.files("cryptic_agent.lexicon")
+        .joinpath("data/indicators.tsv")
+        .read_text(encoding="utf-8")
+    )
+    found: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#"):
+            phrase, mechanism = line.split("\t")
+            found.setdefault(normalize_phrase(phrase), []).append(mechanism.strip())
+    return {phrase: tuple(mechanisms) for phrase, mechanisms in found.items()}
+
+
+def url_variants(url: str) -> set[str]:
+    """Every equivalent spelling of a URL, so excluding a puzzle can't silently miss.
+
+    The cryptics dataset stores 'https://www.fifteensquared.net/...' while the API
+    we scrape returns 'https://fifteensquared.net/...': without this, an evaluation
+    of an older Guardian clue would not hide the clue's own explanation.
+    """
+    core = re.sub(r"^https?://(www\.)?", "", url.strip()).rstrip("/")
+    return {
+        f"{scheme}://{www}{core}{slash}"
+        for scheme in ("http", "https")
+        for www in ("", "www.")
+        for slash in ("", "/")
+    }
+
+
 def default_path() -> Path:
     return config.lexicon_dir() / "lexicon.sqlite"
 
@@ -67,10 +102,11 @@ class Lexicon:
     def _excluding(self, exclude_urls: Collection[str]) -> tuple[str, list[str]]:
         if not exclude_urls:
             return "", []
-        marks = ",".join("?" * len(exclude_urls))
+        urls = sorted({variant for url in exclude_urls for variant in url_variants(url)})
+        marks = ",".join("?" * len(urls))
         return (
             f" AND clue_ref NOT IN (SELECT id FROM clue_refs WHERE source_url IN ({marks}))",
-            list(exclude_urls),
+            urls,
         )
 
     def definition_answers(
@@ -127,14 +163,14 @@ class Lexicon:
         ):
             name = WORDPLAY_NAMES.get(wordplay, wordplay)
             counts[name] = counts.get(name, 0) + n
-        return [Evidence(t, n) for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        mined = [Evidence(t, n) for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        curated = [
+            Evidence(mechanism, 0, curated=True)
+            for mechanism in curated_indicators().get(normalize_phrase(phrase), ())
+            if mechanism not in counts
+        ]
+        return mined + curated
 
     def extra_words(self) -> list[str]:
         """Words to add to the dictionary: well-attested past answers and repaired UKACD entries."""
         return [word for (word,) in self._con.execute("SELECT word FROM words")]
-
-    def is_known_answer(self, answer: str) -> bool:
-        row = self._con.execute(
-            "SELECT 1 FROM words WHERE word = ?", (normalize_answer(answer),)
-        ).fetchone()
-        return row is not None
