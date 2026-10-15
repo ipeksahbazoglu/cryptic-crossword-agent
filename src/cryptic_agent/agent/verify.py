@@ -131,7 +131,12 @@ def verify(
             Check(
                 name=f"definition {d.text!r}",
                 passed=bool(text) and at,
-                detail=f"at the {d.position}",
+                # Worded to make sense on its own: tier 2 shows failures to the model.
+                detail=(
+                    f"at the {d.position}"
+                    if bool(text) and at
+                    else f"not at the {d.position} of the clue"
+                ),
             )
         )
     if not worksheet.definitions:

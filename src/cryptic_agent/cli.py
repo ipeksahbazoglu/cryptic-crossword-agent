@@ -9,6 +9,7 @@ import logging
 import sys
 import textwrap
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -87,6 +88,8 @@ def _ingest(args: argparse.Namespace) -> int:
 def _print_step(step: Step) -> None:
     if step.kind == "fastpass":
         print(textwrap.indent(step.text, "  "))
+    elif step.kind == "tier":
+        print(f"-- {step.text}")
     elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
@@ -106,6 +109,7 @@ def _solve(args: argparse.Namespace) -> int:
         toolbox,
         on_step=None if args.quiet else _print_step,
         fast_pass=not args.no_fast_pass,
+        strategy=args.strategy,
     )
     print(f"Clue: {args.clue} ({args.enumeration})")
     result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
@@ -114,7 +118,8 @@ def _solve(args: argparse.Namespace) -> int:
         print(f"\nNo valid worksheet: {result.error}", file=sys.stderr)
         return 1
     verdict, worksheet = result.verdict, result.worksheet
-    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]")
+    tier = {0: "code only", 1: "one model call", 2: "the agent"}.get(result.tier or 0, "")
+    print(f"\nANSWER: {verdict.answer}  [{verdict.status.upper()}]  (tier {result.tier}: {tier})")
     for d in worksheet.definitions:
         print(f"  definition: {d.text!r} ({d.position})")
     for w in worksheet.wordplay:
@@ -137,15 +142,25 @@ def _solve(args: argparse.Namespace) -> int:
 
 
 def _evaluate(args: argparse.Namespace) -> int:
-    name = args.name or f"n{args.n}-seed{args.seed}" + (
-        f"-reveal{args.reveal_every}" if args.reveal_every else ""
+    name = (
+        args.name
+        or f"{args.category.replace('/', '_')}-n{args.n}-seed{args.seed}-{args.strategy}"
+        + (f"-reveal{args.reveal_every}" if args.reveal_every else "")
     )
     out_path = config.data_dir() / "runs" / f"{name}.jsonl"
-    posts_path = output_path(config.raw_dir(), "guardian/quick-cryptic")
+    posts_path = output_path(config.raw_dir(), args.category)
     if not posts_path.exists():
         print(f"error: no scraped clues at {posts_path}; run cryptic-agent scrape", file=sys.stderr)
         return 2
-    clues = sample_clues(load_clues(load_posts(posts_path)), args.n, args.seed)
+    clues = sample_clues(
+        load_clues(
+            load_posts(posts_path),
+            since=args.since,
+            full_cryptics_only=args.category == "guardian",
+        ),
+        args.n,
+        args.seed,
+    )
 
     if not args.report_only:
         try:
@@ -166,7 +181,7 @@ def _evaluate(args: argparse.Namespace) -> int:
         try:
             run_evaluation(
                 clues,
-                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass),
+                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass, strategy=args.strategy),
                 toolbox,
                 out_path,
                 reveal_every=args.reveal_every,
@@ -230,10 +245,27 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
     )
+    solve.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
+    )
     solve.set_defaults(handler=_solve)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
     evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
+    evaluate.add_argument(
+        "--category",
+        default="guardian",
+        help="Scraped category to test on (default: guardian full cryptics, no Quiptic/Quick).",
+    )
+    evaluate.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        default=None,
+        help="Only puzzles from this date (YYYY-MM-DD), e.g. ones newer than the lexicon.",
+    )
     evaluate.add_argument("--seed", type=int, default=42, help="Seed for the sample.")
     evaluate.add_argument(
         "--name", default=None, help="Run name; results go to data/runs/<name>.jsonl."
@@ -249,6 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
+    evaluate.add_argument(
+        "--strategy",
+        choices=["tiered", "agent"],
+        default="tiered",
+        help="tiered: code, then one call, then the agent (default). agent: always the agent.",
     )
     evaluate.set_defaults(handler=_evaluate)
 

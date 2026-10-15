@@ -6,6 +6,7 @@ import pytest
 
 from cryptic_agent.extraction.table_parser import (
     parse_clue_table,
+    parse_clues,
     strip_markup,
     type_hints_from,
 )
@@ -159,3 +160,104 @@ def test_strip_markup() -> None:
     markup = "<color=red>Cook</color> using\xa0mere <u>**sweet desserts**</u> (USING MERE)\\*"
 
     assert strip_markup(markup) == "Cook using mere sweet desserts (USING MERE)*"
+
+
+# --- paragraph layouts used by many full Guardian cryptic bloggers -------------------
+
+PARAGRAPHS = """\
+Definitions are underlined in the clues.
+
+**Across**
+
+1 <color=#0000ff><u>Starch</u> silly person dropped into sparkling wine (7)</color>
+**CASSAVA**
+ASS (silly person) in CAVA (sparkling wine)
+
+18<color=#0000ff> <u>Confront</u> a constant expense (6)</color>
+**ACCOST**
+A + C (constant) + COST (expense)
+
+**Down**
+
+16 <color=#0000ff>A small train diverted to <u>Nancy?</u> (7)</color>
+**SINATRA**
+An anagram (diverted) of A S[mall] TRAIN – neat misdirection
+"""
+
+# Colour tags around the number and the answer; explanation after a colon.
+COLOURED_PARAGRAPHS = """\
+**Across**
+<color=#0000ff>1. <u>Rubber</u> bird I replaced by middle of May (9)</color>
+<color=#ff0000>**SANDPAPER** </color>: "sandpiper" with "I" replacing middle letter of "May".
+
+<color=#0000ff>6. <u>Best</u> comedian with shaved head (5)</color>
+<color=#ff0000>**CREAM** </color>: "scream" minus its 1st letter.
+"""
+
+
+def paragraph_post(body: str) -> RawPost:
+    return RawPost(
+        id=2,
+        date=datetime(2026, 9, 30),
+        url="https://fifteensquared.net/guardian-30125-imogen/",
+        title="Guardian 30,125 / Imogen",
+        content_markdown=body,
+    )
+
+
+def test_paragraph_layout() -> None:
+    cassava, accost, sinatra = parse_clues(paragraph_post(PARAGRAPHS))
+
+    assert (cassava.number, cassava.direction, cassava.answer) == (1, "across", "CASSAVA")
+    assert cassava.clue_text == "Starch silly person dropped into sparkling wine"
+    assert cassava.definitions == ["Starch"]
+    assert cassava.indicators == []  # the blue wraps the whole clue: not an indicator
+    assert cassava.parsing == "ASS (silly person) in CAVA (sparkling wine)"
+    assert accost.number == 18  # "18<color..." with no space
+    assert (sinatra.direction, sinatra.type_hints) == ("down", ["anagram"])
+    assert sinatra.definitions == ["Nancy"]
+
+
+def test_coloured_paragraph_layout() -> None:
+    sandpaper, cream = parse_clues(paragraph_post(COLOURED_PARAGRAPHS))
+
+    assert (sandpaper.number, sandpaper.answer, sandpaper.definitions) == (
+        1,
+        "SANDPAPER",
+        ["Rubber"],
+    )
+    assert sandpaper.parsing.startswith('"sandpiper"')
+    assert cream.parsing == '"scream" minus its 1st letter.'  # not run into the next clue
+
+
+def test_tables_are_preferred_when_present() -> None:
+    assert [c.answer for c in parse_clues(post(CURRENT))] == ["CHOP", "MERINGUES", "BAR"]
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        "<color=#ff0000><u>One whose number is up, having rounded Lido recklessly?</u></color>",
+        "<color=#4682b4><u>This marine</u> is deeply blue</color>",  # colour wraps a definition
+    ],
+)
+def test_colour_on_a_whole_clue_or_definition_is_not_an_indicator(markup: str) -> None:
+    table = f"| 1 | {markup} (8) | Answer DEADBEAT |\n"
+
+    (clue,) = parse_clue_table(post(table))
+
+    assert clue.indicators == []
+
+
+@pytest.mark.parametrize(
+    ("parsing", "hints"),
+    [
+        ("An anagram (diverted) of A S[mall] TRAIN", ["anagram"]),
+        ("Double definition (for the first, Chambers has ...)", ["double_definition"]),
+        ("A reversal (turning) of MOOD (state of mind)", ["reversal"]),
+        ("Hidden in tHE ROse", ["hidden_word"]),
+        ("ASS (silly person) in CAVA; the anagram idea is a red herring", []),  # aside
+    ],
+)
+def test_type_hints_from_plain_opening_words(parsing: str, hints: list[str]) -> None:
+    assert type_hints_from(parsing) == hints
