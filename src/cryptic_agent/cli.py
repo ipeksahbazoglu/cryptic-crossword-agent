@@ -16,11 +16,22 @@ from dotenv import find_dotenv, load_dotenv
 from cryptic_agent import config
 from cryptic_agent.agent.solver import Solver, Step
 from cryptic_agent.agent.tools import Toolbox
+from cryptic_agent.evaluation.run import (
+    ResultRow,
+    clue_key,
+    format_report,
+    load_clues,
+    load_posts,
+    run_evaluation,
+    sample_clues,
+    summarise,
+)
+from cryptic_agent.jsonl import read_jsonl
 from cryptic_agent.lexicon.build import build_lexicon
 from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMismatchError, fetch
 from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
 from cryptic_agent.lexicon.store import default_path as lexicon_path
-from cryptic_agent.llm.client import GroqClient
+from cryptic_agent.llm.client import GroqClient, RateLimitedError
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
 from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
@@ -74,7 +85,9 @@ def _ingest(args: argparse.Namespace) -> int:
 
 
 def _print_step(step: Step) -> None:
-    if step.kind == "thought":
+    if step.kind == "fastpass":
+        print(textwrap.indent(step.text, "  "))
+    elif step.kind == "thought":
         print(f"  thinking: {textwrap.shorten(step.text, 300)}")
     elif step.kind == "tool":
         args = ", ".join(f"{k}={v!r}" for k, v in step.arguments.items())
@@ -88,7 +101,12 @@ def _solve(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     llm = GroqClient()
-    solver = Solver(llm, toolbox, on_step=None if args.quiet else _print_step)
+    solver = Solver(
+        llm,
+        toolbox,
+        on_step=None if args.quiet else _print_step,
+        fast_pass=not args.no_fast_pass,
+    )
     print(f"Clue: {args.clue} ({args.enumeration})")
     result = solver.solve(args.clue, args.enumeration, pattern=args.pattern)
 
@@ -115,6 +133,58 @@ def _solve(args: argparse.Namespace) -> int:
         f"cost: {llm.totals.requests} requests, {result.usage.total_tokens:,} tokens, "
         f"waited {llm.totals.waited_seconds:.0f}s for rate limits"
     )
+    return 0
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    name = args.name or f"n{args.n}-seed{args.seed}" + (
+        f"-reveal{args.reveal_every}" if args.reveal_every else ""
+    )
+    out_path = config.data_dir() / "runs" / f"{name}.jsonl"
+    posts_path = output_path(config.raw_dir(), "guardian/quick-cryptic")
+    if not posts_path.exists():
+        print(f"error: no scraped clues at {posts_path}; run cryptic-agent scrape", file=sys.stderr)
+        return 2
+    clues = sample_clues(load_clues(load_posts(posts_path)), args.n, args.seed)
+
+    if not args.report_only:
+        try:
+            toolbox = Toolbox(Dictionary.load(), Lexicon())
+        except (LexiconNotFoundError, DictionaryNotFoundError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        llm = GroqClient()
+
+        def progress(row: ResultRow, i: int, total: int) -> None:
+            mark = "right" if row.right else "WRONG"
+            print(
+                f"[{i}/{total}] {row.status:<9} {mark}  {row.answer or '-':<12} "
+                f"({row.expected})  {row.clue} ({row.enumeration})",
+                flush=True,
+            )
+
+        try:
+            run_evaluation(
+                clues,
+                lambda tb: Solver(llm, tb, fast_pass=not args.no_fast_pass),
+                toolbox,
+                out_path,
+                reveal_every=args.reveal_every,
+                on_row=progress,
+            )
+        except RateLimitedError as exc:
+            print(
+                f"\nStopped: out of Groq quota ({str(exc)[:160]}...).\n"
+                "Progress is saved; run the same command again later to resume.",
+                file=sys.stderr,
+            )
+    if not out_path.exists():
+        print(f"error: no results at {out_path}", file=sys.stderr)
+        return 2
+    keys = {clue_key(c) for c in clues}
+    rows = [r for r in read_jsonl(out_path, ResultRow) if r.key in keys]
+    print(f"\nRun: {out_path} ({len(rows)}/{len(clues)} clues)\n")
+    print(format_report(summarise(rows)))
     return 0
 
 
@@ -157,14 +227,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--pattern", default=None, help="Known letters from crossing answers, e.g. 'T?E?S?N'."
     )
     solve.add_argument("--quiet", action="store_true", help="Only print the verdict.")
+    solve.add_argument(
+        "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
     solve.set_defaults(handler=_solve)
 
-    evaluate = subparsers.add_parser("eval", help="Score the solver on held-out clues.")
-    evaluate.add_argument("--dataset", type=Path, default=None, help="clues.jsonl to test on.")
-    evaluate.add_argument("--n", type=int, default=50, help="Number of test clues.")
-    evaluate.add_argument("--n-examples", type=int, default=5, help="Few-shot examples per clue.")
-    evaluate.add_argument("--seed", type=int, default=42, help="Random seed for the split.")
-    evaluate.set_defaults(handler=_not_implemented)
+    evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
+    evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
+    evaluate.add_argument("--seed", type=int, default=42, help="Seed for the sample.")
+    evaluate.add_argument(
+        "--name", default=None, help="Run name; results go to data/runs/<name>.jsonl."
+    )
+    evaluate.add_argument(
+        "--reveal-every",
+        type=int,
+        default=None,
+        help="Simulate crossing letters: reveal every Nth letter (2 = M?R?N?U?S).",
+    )
+    evaluate.add_argument(
+        "--report-only", action="store_true", help="Summarise an existing run, solve nothing."
+    )
+    evaluate.add_argument(
+        "--no-fast-pass", action="store_true", help="Skip the mechanical candidate search."
+    )
+    evaluate.set_defaults(handler=_evaluate)
 
     return parser
 

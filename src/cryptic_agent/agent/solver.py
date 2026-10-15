@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
+from cryptic_agent.agent.fastpass import fast_pass as run_fast_pass
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.agent.verify import Verdict, verify
 from cryptic_agent.agent.worksheet import WORKSHEET_SCHEMA, Worksheet
@@ -25,6 +26,7 @@ from cryptic_agent.llm.client import (
     LLMClient,
     LLMError,
     Message,
+    RateLimitedError,
     StructuredOutputError,
     Usage,
 )
@@ -84,7 +86,7 @@ thinking very short."""
 class Step:
     """One recorded event in a solve."""
 
-    kind: str  # "thought" | "tool" | "worksheet"
+    kind: str  # "fastpass" | "thought" | "tool" | "worksheet"
     text: str = ""
     tool: str = ""
     arguments: dict[str, object] = field(default_factory=dict)
@@ -120,6 +122,7 @@ class Solver:
     toolbox: Toolbox
     max_rounds: int = 8
     on_step: Callable[[Step], None] | None = None  # e.g. print steps live
+    fast_pass: bool = True  # give the model mechanically found candidates up front
 
     def _record(self, steps: list[Step], step: Step) -> None:
         steps.append(step)
@@ -127,10 +130,13 @@ class Solver:
             self.on_step(step)
 
     def solve(self, clue: str, enumeration: str, *, pattern: str | None = None) -> SolveResult:
-        """Solve one clue. Never raises for model or API problems: they become `error`."""
+        """Solve one clue. Model and API problems become `error`, except running out of
+        quota (RateLimitedError), which is raised so the caller can stop and resume."""
         steps: list[Step] = []
         try:
             return self._solve(clue, enumeration, pattern, steps)
+        except RateLimitedError:
+            raise  # out of quota: not this clue's fault, so the caller must stop
         except LLMError as exc:
             logger.warning("solve failed: %s", exc)
             return SolveResult(
@@ -142,9 +148,21 @@ class Solver:
     ) -> SolveResult:
         prompt = 0
         completion = 0
+        user_prompt = _user_prompt(clue, enumeration, pattern)
+        if self.fast_pass:
+            found = run_fast_pass(
+                clue,
+                enumeration,
+                self.toolbox.dictionary,
+                self.toolbox.lexicon,
+                pattern=pattern,
+                exclude_urls=self.toolbox.exclude_urls,
+            )
+            self._record(steps, Step("fastpass", text=found.summary()))
+            user_prompt += "\n\n" + found.summary()
         messages: list[Message] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _user_prompt(clue, enumeration, pattern)},
+            {"role": "user", "content": user_prompt},
         ]
 
         for _ in range(self.max_rounds):

@@ -84,6 +84,13 @@ class InvalidToolCallError(LLMError):
     """
 
 
+class RateLimitedError(LLMError):
+    """Out of quota even after retries (e.g. the free tier's 200,000 tokens per day).
+
+    Not a problem with any one clue: callers should stop and resume later.
+    """
+
+
 class LLMClient(Protocol):
     def complete(
         self,
@@ -204,7 +211,9 @@ class GroqClient:
             if "tool_use_failed" in str(exc):
                 raise InvalidToolCallError(str(exc)) from exc
             raise LLMError(str(exc)) from exc
-        except groq.APIError as exc:  # rate limits after all retries, timeouts, 5xx
+        except groq.RateLimitError as exc:  # still limited after the SDK's retries
+            raise RateLimitedError(str(exc)) from exc
+        except groq.APIError as exc:  # timeouts, 5xx after retries
             raise LLMError(f"{type(exc).__name__}: {exc}") from exc
         self.budget.update(raw.headers)
         response = raw.parse()
