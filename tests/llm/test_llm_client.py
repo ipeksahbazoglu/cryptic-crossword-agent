@@ -167,6 +167,22 @@ def test_running_out_of_quota_is_its_own_error() -> None:
     assert len(fake.requests) == 6
 
 
+def test_reasoning_tokens_are_read_from_the_response() -> None:
+    body = chat_response({"role": "assistant", "content": "TREASON"})
+    body["usage"] = {
+        "prompt_tokens": 90,
+        "completion_tokens": 80,
+        "total_tokens": 170,
+        "completion_tokens_details": {"reasoning_tokens": 69},
+    }
+
+    reply = make_client(FakeGroq(httpx.Response(200, json=body))).complete(
+        [{"role": "user", "content": "x"}]
+    )
+
+    assert reply.usage == Usage(prompt_tokens=90, completion_tokens=80, reasoning_tokens=69)
+
+
 def test_reasoning_effort_is_sent_when_asked() -> None:
     fake = FakeGroq(
         *[httpx.Response(200, json=chat_response({"role": "assistant"})) for _ in range(2)]

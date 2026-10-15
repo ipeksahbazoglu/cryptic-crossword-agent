@@ -107,9 +107,10 @@ def test_steps_are_recorded_and_streamed(toolbox: Toolbox) -> None:
         "Senator arranged crime", "7"
     )
 
-    assert [s.kind for s in result.steps] == ["fastpass", "thought", "tool", "thought", "worksheet"]
+    kinds = [s.kind for s in result.steps]
+    assert kinds == ["fastpass", "call", "thought", "tool", "call", "thought", "call", "worksheet"]
     assert seen == result.steps
-    assert '"reversed":"PARTS"' in result.steps[2].result
+    assert '"reversed":"PARTS"' in result.steps[3].result
 
 
 def test_fast_pass_evidence_opens_the_conversation(toolbox: Toolbox) -> None:

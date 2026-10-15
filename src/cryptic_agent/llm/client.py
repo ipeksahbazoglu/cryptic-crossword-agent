@@ -36,8 +36,12 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class Usage:
+    """Tokens for one call. prompt = everything sent; completion = everything the
+    model wrote, of which reasoning_tokens were its hidden thinking."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -219,9 +223,11 @@ class GroqClient:
         response = raw.parse()
 
         choice = response.choices[0]
+        details = response.usage.completion_tokens_details if response.usage else None
         usage = Usage(
             prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
             completion_tokens=response.usage.completion_tokens if response.usage else 0,
+            reasoning_tokens=(details.reasoning_tokens or 0) if details else 0,
         )
         self.totals.add(usage)
         tool_calls = [

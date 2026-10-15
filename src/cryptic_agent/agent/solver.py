@@ -121,11 +121,12 @@ SUBMIT_TOOL = {
 class Step:
     """One recorded event in a solve."""
 
-    kind: str  # "fastpass" | "tier" | "thought" | "tool" | "worksheet"
+    kind: str  # "fastpass" | "tier" | "call" | "thought" | "tool" | "worksheet"
     text: str = ""
     tool: str = ""
     arguments: dict[str, object] = field(default_factory=dict)
     result: str = ""
+    usage: Usage | None = None  # set on "call" steps: what that model call cost
 
 
 @dataclass
@@ -158,13 +159,15 @@ class _Tally:
 
     prompt: int = 0
     completion: int = 0
+    reasoning: int = 0
 
     def add(self, reply: Completion) -> None:
         self.prompt += reply.usage.prompt_tokens
         self.completion += reply.usage.completion_tokens
+        self.reasoning += reply.usage.reasoning_tokens
 
     def usage(self) -> Usage:
-        return Usage(self.prompt, self.completion)
+        return Usage(self.prompt, self.completion, self.reasoning)
 
 
 @dataclass
@@ -241,7 +244,7 @@ class Solver:
                 return result(sheet, self._verified(sheet, clue, enumeration, pattern, steps), 0)
 
             self._record(steps, Step("tier", text="tier 1: one model call"))
-            sheet1 = self._quick_worksheet(clue, enumeration, pattern, found, tally)
+            sheet1 = self._quick_worksheet(clue, enumeration, pattern, found, steps, tally)
             if sheet1 is not None:
                 verdict1 = self._verified(sheet1, clue, enumeration, pattern, steps)
                 if verdict1.status == "confirmed":
@@ -270,7 +273,14 @@ class Solver:
             )
         return result(sheet2, self._verified(sheet2, clue, enumeration, pattern, steps), 2)
 
-    def _request_worksheet(self, messages: list[Message], tally: _Tally) -> Worksheet | None:
+    def _count(self, reply: Completion, label: str, steps: list[Step], tally: _Tally) -> None:
+        """Record one model call: its cost goes in the tally and in the step log."""
+        tally.add(reply)
+        self._record(steps, Step("call", text=label, usage=reply.usage))
+
+    def _request_worksheet(
+        self, messages: list[Message], label: str, steps: list[Step], tally: _Tally
+    ) -> Worksheet | None:
         """Ask for a strict-schema worksheet, with retries (see WORKSHEET_ATTEMPTS)."""
         for attempt, (effort, max_tokens) in enumerate(WORKSHEET_ATTEMPTS, start=1):
             try:
@@ -282,7 +292,7 @@ class Solver:
                 if attempt == 1:
                     messages.append({"role": "user", "content": RETRY_WORKSHEET_PROMPT})
                 continue
-            tally.add(reply)
+            self._count(reply, f"{label} ({effort} effort)", steps, tally)
             try:
                 return Worksheet.model_validate_json(reply.content)
             except ValidationError as exc:
@@ -296,6 +306,7 @@ class Solver:
         enumeration: str,
         pattern: str | None,
         found: FastPass,
+        steps: list[Step],
         tally: _Tally,
     ) -> Worksheet | None:
         """Tier 1: one call, no tools."""
@@ -306,7 +317,7 @@ class Solver:
                 "content": _user_prompt(clue, enumeration, pattern) + "\n\n" + found.summary(),
             },
         ]
-        return self._request_worksheet(messages, tally)
+        return self._request_worksheet(messages, "tier 1: worksheet", steps, tally)
 
     def _agent_worksheet(
         self,
@@ -328,7 +339,7 @@ class Solver:
         ]
         tools = [*self.toolbox.specs(), SUBMIT_TOOL]
 
-        for _ in range(self.max_rounds):
+        for round_number in range(1, self.max_rounds + 1):
             try:
                 reply = self.llm.complete(messages, tools=tools)
             except InvalidToolCallError as exc:
@@ -336,7 +347,7 @@ class Solver:
                 self._record(steps, Step("thought", text=f"[invalid tool call] {exc}"))
                 messages.append({"role": "user", "content": note})
                 continue
-            tally.add(reply)
+            self._count(reply, f"tier 2: round {round_number}", steps, tally)
             if reply.reasoning or reply.content:
                 self._record(
                     steps, Step("thought", text=(reply.reasoning or reply.content).strip())
@@ -365,4 +376,4 @@ class Solver:
 
         # The model answered in words instead of submitting: ask for the worksheet.
         messages.append({"role": "user", "content": WORKSHEET_PROMPT})
-        return self._request_worksheet(messages, tally)
+        return self._request_worksheet(messages, "tier 2: worksheet", steps, tally)
