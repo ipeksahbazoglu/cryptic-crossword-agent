@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 
+import requests
 from dotenv import find_dotenv, load_dotenv
 
 from cryptic_agent import config
@@ -47,7 +48,7 @@ def _scrape(args: argparse.Namespace) -> int:
         summary = scrape_category(
             WordPressClient(), args.category, max_pages=args.pages, out_path=out_path
         )
-    except CategoryNotFoundError as exc:
+    except (CategoryNotFoundError, requests.RequestException) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(
@@ -224,7 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--category", required=True, help="Category slug, e.g. 'guardian/quick-cryptic'."
     )
     scrape.add_argument(
-        "--pages", type=int, default=1, help=f"Pages to fetch, newest first ({MAX_PER_PAGE} each)."
+        "--pages",
+        type=int,
+        default=None,
+        help=f"Pages to fetch, newest first ({MAX_PER_PAGE} each). "
+        "Default: until reaching posts already saved (all of them on the first run).",
     )
     scrape.add_argument("--output", type=Path, default=None, help="Output .jsonl path.")
     scrape.set_defaults(handler=_scrape)

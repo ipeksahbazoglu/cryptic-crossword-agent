@@ -8,6 +8,7 @@ User-Agent, and automatic retries with exponential backoff on 429/5xx
 (honouring Retry-After).
 """
 
+import itertools
 import time
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -83,10 +84,14 @@ class WordPressClient:
         return int(matches[0]["id"])
 
     def iter_posts(
-        self, category_id: int, *, max_pages: int, per_page: int = MAX_PER_PAGE
+        self, category_id: int, *, max_pages: int | None, per_page: int = MAX_PER_PAGE
     ) -> Iterator[dict[str, Any]]:
-        """Yield raw post JSON, newest first, for up to `max_pages` pages."""
-        for page in range(1, max_pages + 1):
+        """Yield raw post JSON, newest first, for up to `max_pages` pages (None: all).
+
+        Pages are fetched lazily, so a caller that stops iterating stops the requests.
+        """
+        pages = itertools.count(1) if max_pages is None else range(1, max_pages + 1)
+        for page in pages:
             response = self._get(
                 "/posts",
                 {

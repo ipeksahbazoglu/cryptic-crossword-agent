@@ -13,7 +13,7 @@ The design comes from `../CLAUDE_CODE_HANDOFF.md`. Its "Repo state" section is o
 ```bash
 uv sync                                        # install deps + dev group into .venv
 uv run cryptic-agent --help                    # CLI: scrape|ingest|solve|eval
-uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
+uv run cryptic-agent scrape --category guardian/quick-cryptic   # -> data/raw/*.jsonl; reruns fetch only new posts
 uv run cryptic-agent solve --clue "Senator arranged crime" --enumeration 7 [--pattern T?E?S?N]
 uv run cryptic-agent eval --n 60 --seed 42 --name baseline   # resumable; results in data/runs/<name>.jsonl
 uv run cryptic-agent eval --n 60 --seed 42 --name baseline --report-only

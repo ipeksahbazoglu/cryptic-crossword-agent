@@ -68,7 +68,7 @@ class _StubWordPress(WordPressClient):
         return 56
 
     def iter_posts(
-        self, category_id: int, *, max_pages: int, per_page: int = 100
+        self, category_id: int, *, max_pages: int | None, per_page: int = 100
     ) -> Iterator[dict[str, Any]]:
         yield {
             "id": 1,
