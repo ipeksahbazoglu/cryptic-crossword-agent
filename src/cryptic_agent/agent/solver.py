@@ -151,7 +151,7 @@ class SolveResult:
         return self.verdict.answer if self.verdict else None
 
 
-def _user_prompt(clue: str, enumeration: str, pattern: str | None) -> str:
+def clue_prompt(clue: str, enumeration: str, pattern: str | None) -> str:
     prompt = f"Clue: {clue} ({enumeration})"
     if pattern:
         prompt += f"\nKnown letters from crossing answers (? = unknown): {pattern}"
@@ -345,7 +345,7 @@ class Solver:
             {"role": "system", "content": QUICK_PROMPT},
             {
                 "role": "user",
-                "content": _user_prompt(clue, enumeration, pattern) + "\n\n" + found.summary(),
+                "content": clue_prompt(clue, enumeration, pattern) + "\n\n" + found.summary(),
             },
         ]
         return self._request_worksheet(messages, "tier 1: worksheet", steps, tally)
@@ -361,7 +361,7 @@ class Solver:
         tally: _Tally,
     ) -> Worksheet | None:
         """Tier 2: the tool-use loop, answering through submit_answer."""
-        user_prompt = _user_prompt(clue, enumeration, pattern)
+        user_prompt = clue_prompt(clue, enumeration, pattern)
         if found is not None and self.fast_pass:
             user_prompt += "\n\n" + found.summary()
         messages: list[Message] = [
