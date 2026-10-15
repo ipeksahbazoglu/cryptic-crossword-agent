@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cryptic-crossword": {
+      "command": "uv",
+      "args": ["run", "cryptic-agent", "mcp"]
+    }
+  }
+}
