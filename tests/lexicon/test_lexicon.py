@@ -124,7 +124,7 @@ def test_extra_words_need_two_past_clues(lexicon: Lexicon) -> None:
 
 def test_damaged_ukacd_entries_restored_only_when_attested(lexicon: Lexicon) -> None:
     # "pr�cis" in the fake UKACD; "precis" is attested by Moby and past answers.
-    assert lexicon.is_known_answer("PRECIS")
+    assert "PRECIS" in lexicon.extra_words()
 
 
 def test_repair_skips_ambiguous_and_unattested_entries() -> None:

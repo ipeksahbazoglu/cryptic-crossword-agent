@@ -2,11 +2,17 @@ import json
 
 import pytest
 
-from cryptic_agent.agent.ledger import format_ledger, ledger, request_overhead
+from cryptic_agent.agent.ledger import format_ledger, ledger
 from cryptic_agent.agent.solver import Solver
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.lexicon.store import Lexicon
-from cryptic_agent.llm.client import Completion, ScriptedLLM, ToolCall, Usage
+from cryptic_agent.llm.client import (
+    Completion,
+    InvalidToolCallError,
+    ScriptedLLM,
+    ToolCall,
+    Usage,
+)
 from cryptic_agent.tools.dictionary import Dictionary
 
 WORKSHEET = {
@@ -83,8 +89,22 @@ def test_formatted_ledger_shows_every_call_and_the_total(toolbox: Toolbox) -> No
     assert "4,500" in text  # total
 
 
-def test_request_overhead_counts_instructions_and_tools(toolbox: Toolbox) -> None:
-    overhead = request_overhead(toolbox)
+def test_rejected_calls_appear_in_the_ledger(toolbox: Toolbox) -> None:
+    llm = ScriptedLLM(
+        [
+            InvalidToolCallError("attempted to call tool 'commentary'"),
+            Completion(
+                "",
+                [ToolCall("s1", "submit_answer", WORKSHEET)],
+                "tool_calls",
+                Usage(1200, 300, 200),
+            ),
+        ]
+    )
 
-    assert set(overhead) == {"instructions", "tool descriptions"}
-    assert overhead["tool descriptions"] > overhead["instructions"] > 0
+    result = Solver(llm, toolbox, strategy="agent").solve("Senator arranged crime", "7")
+    rows = ledger(result)
+
+    assert [r.step for r in rows] == ["tier 2: round 1, rejected", "tier 2: round 2"]
+    assert rows[0].total == 0 and "rejected" in rows[0].did
+    assert rows[-1].running_total == result.usage.total_tokens == 1500

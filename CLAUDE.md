@@ -12,7 +12,7 @@ The design comes from `../CLAUDE_CODE_HANDOFF.md`. Its "Repo state" section is o
 
 ```bash
 uv sync                                        # install deps + dev group into .venv
-uv run cryptic-agent --help                    # CLI: scrape|extract|solve|eval
+uv run cryptic-agent --help                    # CLI: scrape|ingest|solve|eval
 uv run cryptic-agent scrape --category guardian/quick-cryptic --pages 2   # -> data/raw/*.jsonl
 uv run cryptic-agent solve --clue "Senator arranged crime" --enumeration 7 [--pattern T?E?S?N]
 uv run cryptic-agent eval --n 60 --seed 42 --name baseline   # resumable; results in data/runs/<name>.jsonl
@@ -21,7 +21,7 @@ uv sync --group demo                           # then open demos/*.ipynb (kernel
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests                          # strict, with the pydantic plugin
 uv run pytest                                  # tests never hit the network or an LLM
-uv run pytest tests/test_models.py::test_hidden_word   # single test
+uv run pytest tests/agent/test_verify.py::test_unexplained_clue_word   # single test
 uv run pre-commit run --all-files              # hooks call .venv/bin tools, so run `uv sync` first
 uv run cryptic-agent ingest                    # download sources (checksum-verified) + build data/lexicon/lexicon.sqlite (~1 min)
 ```
@@ -30,15 +30,9 @@ CI (`.github/workflows/ci.yml`) runs `uv sync --locked`, ruff, `mypy src tests`,
 
 ## Architecture
 
-The pipeline is **scrape → extract → store/index → solve → eval**. Each stage reads the previous stage's output from `data/` (gitignored; override with `CRYPTIC_AGENT_DATA_DIR`).
+The pipeline is **scrape → parse → (ingest the lexicon) → solve → eval**. Each stage reads the previous stage's output from `data/` (gitignored; override with `CRYPTIC_AGENT_DATA_DIR`).
 
-- **`models.py`: the domain schema that every stage shares.** A `Clue` holds `definitions: list[Definition]` and `wordplay: list[WordplayComponent]`, and each component has an indicator and fodder. Validators encode clue anatomy:
-  - a definition sits at the start or end of the clue, or covers the `whole` clue
-  - indicator and fodder text are whole words that appear in the clue
-  - a double definition has 2+ definitions and no wordplay
-  - the answer length matches the enumeration
-
-  `Clue.category` is computed from this structure, not stored. `double_definition`, `cryptic_definition`, `and_lit` and `compound` are clue shapes, not `ComponentType`s. `normalize_answer`, `normalize_phrase` and `enumeration_lengths` are the shared text helpers.
+- **`models.py`:** the shared text helpers (`normalize_answer`, `normalize_phrase`, `enumeration_lengths`) and `RawPost`. Parsed clues are `ParsedClue` (`extraction/table_parser.py`); the solver's answer is a `Worksheet` (`agent/worksheet.py`).
 - **`jsonl.py`:** typed `read_jsonl(path, Model)` with `file:line` errors, an atomic `write_jsonl`, and `append_jsonl` for resumable jobs.
 - **`scraper/`:** `client.py` is a WordPress REST client that limits itself to 1 request/s (with an injectable clock and sleep), sends a User-Agent, and retries 429/5xx via urllib3 `Retry`. `clean.py` is pure HTML→`RawPost` conversion. `scrape.py` merges posts into the existing file by ID. **Bloggers mark clue parts with formatting.** For example, the Quick Cryptic legend says "the definition is in bold and underlined, the indicator is in red". `clean.py` keeps that formatting as `**bold**`, `<u>…</u>` and `<color=red>…</color>`, which plain markdownify would drop. It records formatting, not meaning: extraction reads each blogger's own legend.
 - **`lexicon/`:** third-party reference data, the solver's "experience".
@@ -49,15 +43,14 @@ The pipeline is **scrape → extract → store/index → solve → eval**. Each 
   - Mined abbreviations need 3+ supporting clues, which filters noise like `a → GR`. `lexicon/data/abbreviations.tsv` is a hand-checked list that always counts (it adds "one → I", which the data misses).
 - **`tools/`:** the verification tools. `Dictionary.load()` (UKACD + well-attested past answers + repaired entries; 99.7% of real answers) gives O(1) membership and anagram lookup, indexed by sorted letters, and is passed in rather than kept as a global. `wordplay.py` has `find_anagrams`, `check_hidden_word`, `check_answer` (which checks multi-word answers word by word) and `reverse_letters`. Each returns a frozen pydantic result.
 - **`evaluation/run.py`:** a seeded sample of scraped clues, spread evenly across the blogger's wordplay labels; each result is appended to `data/runs/<name>.jsonl` as it finishes, so an interrupted run resumes; each clue's own puzzle is passed as `exclude_urls`. The report's key number is **CONFIRMED BUT WRONG**, which must stay 0. Compare runs with the same `--n --seed` to measure a change.
-- **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code. `extract`, `solve` and `eval` are still stubs.
+- **`config.py` / `cli.py`:** nothing happens at import time. The CLI loads `.env` from the current directory, and each handler returns an exit code.
 
 **`agent/`: the solver**, built so it is never confidently wrong.
   - `tools.py`: `Toolbox` declares each tool once (name, description for the model, JSON parameters, function) over the dictionary and lexicon; `run()` returns compact JSON and turns bad calls into error results the model can read. `exclude_urls` flows into every lexicon lookup.
-  - `solver.py`: `Solver(strategy="tiered")` escalates to save tokens: **tier 0** code only (`assemble.py`: a STRONG fast-pass candidate with a recognised indicator, all leftover words in `LINK_WORDS`, verified, and exactly one such answer, else escalate), **tier 1** one strict-schema call with the fast-pass evidence, **tier 2** the tool loop (at most `max_rounds`, answering via the `submit_answer` tool and told why tier 1 wasn't confirmed). A later tier runs only if the earlier one isn't confirmed. `strategy="agent"` goes straight to tier 2, for comparisons. `SolveResult.tier` records where it was answered; every thought and tool call is a `Step`.
+  - `solver.py`: `Solver(strategy="tiered")` escalates to save tokens: **tier 0** code only (`assemble.py`: a STRONG fast-pass candidate with a recognised indicator, all leftover words in `LINK_WORDS`, verified, and exactly one such answer, else escalate), **tier 1** one strict-schema call with the fast-pass evidence (skipped when the fast pass found no wordplay at all), **tier 2** the tool loop (at most `max_rounds`, answering via the `submit_answer` tool, told why tier 1 wasn't confirmed, and nudged rather than re-run when it repeats a tool call). A later tier runs only if the earlier one isn't confirmed. `strategy="agent"` goes straight to tier 2, for comparisons. `SolveResult.tier` records where it was answered; every thought and tool call is a `Step`.
   - `worksheet.py`: the model's full parse of the clue (definitions with positions, wordplay steps with indicator, fodder and produced letters, link words). The schema is hand-written for providers' strict mode; a test keeps it in sync with the pydantic model.
   - `fastpass.py`: code-only candidates found before the model starts: definition spans at either end (past answers, thesaurus; a trailing 's also tried as "is") and wordplay from the clue's letters (anagrams, boundary-crossing hidden words, acrostics, alternations, literal reversals) with neighbouring indicators. A candidate is STRONG when a definition span and a separate wordplay span agree. Its summary opens the model's first message (`Solver(fast_pass=False)` / `--no-fast-pass` turns it off). It never confirms anything itself.
-  - `ledger.py`: every model call is a `"call"` step carrying its `Usage` (prompt, completion, and `reasoning_tokens`, the model's hidden thinking). `ledger(result)` lists them with a running total; `solve --tokens` and `demos/03_tokens.ipynb` show it. Measured on a hard clue: about half the tokens are reasoning, and the worksheet calls are the most expensive.
-  - `verify.py`: code re-checks the worksheet. **confirmed** only if the answer fits the enumeration (and `--pattern`) and is a real word, the definitions sit where claimed, at least one wordplay step is verified mechanically and none fails, every clue word has a role, and the model claimed confirmed. Otherwise **pencilled** (fits, not proven: double definitions, synonym charades) or **unsure** (doesn't fit). Don't loosen these rules without tests: they are what "never confidently wrong" rests on.
-  - The human-style design (fast pass of code-generated candidates, crossing letters, stuck checklist) is the plan for what comes next; see `../CLAUDE_CODE_HANDOFF.md` for the original design notes.
+  - `ledger.py`: every model call is a `"call"` step carrying its `Usage` (prompt, completion, and `reasoning_tokens`, the model's hidden thinking). `ledger(result)` lists them with a running total; rejected calls appear as rows with unknown cost. `solve --tokens` and `demos/03_tokens.ipynb` show it. Measured on a hard clue: about half the tokens are reasoning, and the worksheet calls are the most expensive.
+  - `verify.py`: code re-checks the worksheet. **confirmed** needs all of: the answer fits the enumeration (and `--pattern`) and is a real word; the definitions sit where claimed; at least one wordplay step is verified mechanically and none fails; every clue word is used exactly as often as it appears (counted, so no word plays two roles; &lit is the one exception); the model claimed confirmed; and, **if the same wordplay could have made a different real word** (SORE, ORES, ROES from "rose"), the lexicon links the definition to this answer (respecting `exclude_urls`). Otherwise **pencilled** (fits, not proven) or **unsure** (doesn't fit). Don't loosen these rules without tests: they are what "never confidently wrong" rests on.
 
 **LLM provider: Groq free tier**, model `openai/gpt-oss-120b` (`config.MODEL`; key in `.env` as `GROQ_API_KEY`). `llm/client.py` defines a provider-neutral `LLMClient` protocol (OpenAI-style messages in, `Completion` with text, tool calls, usage and the model's separate `reasoning` out). `GroqClient` implements it: it paces requests with `TokenBudget` using the `x-ratelimit-*` headers (free tier: 8,000 tokens/min, 1,000 requests/day, and **200,000 tokens/day**, which no header reports: about 40 solves a day), and the SDK retries 429/5xx. Errors are typed: `LLMError` > `StructuredOutputError` / `InvalidToolCallError` (recoverable; the solver retries or tells the model) / `RateLimitedError` (out of quota: the solver re-raises it and evaluation stops so it can resume, never recording it as a clue's result). Tests use `ScriptedLLM` or an `httpx.MockTransport`, never the real API. Groq has no embeddings API, so any embeddings must be local.

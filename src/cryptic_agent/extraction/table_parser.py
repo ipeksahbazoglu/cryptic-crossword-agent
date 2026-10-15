@@ -33,7 +33,7 @@ _COLOR = re.compile(r"<color=[^>]+>(.*?)</color>", re.S)
 _ITALIC = re.compile(r"(?<![*\\])\*([^*\n]+?)\*(?!\*)")
 _SETTER = re.compile(r"(?:\bby|\u2013|-)\s+([A-Z][\w']+)\s*$")
 
-# How bloggers name mechanisms in italics -> our vocabulary (ComponentType or clue shape).
+# How bloggers name mechanisms -> our vocabulary (see agent/worksheet.py Mechanism).
 TYPE_HINT_WORDS: dict[str, str] = {
     "anagram": "anagram",
     "hidden": "hidden_word",
@@ -223,14 +223,19 @@ def _make_clue(
 
 
 def _direction_header(text: str) -> Literal["across", "down"] | None:
-    """'ACROSS' / '**Across**' / '| | **DOWN** |' -> direction; clue lines -> None."""
-    plain = strip_markup(text).upper()
-    if re.search(r"\(\d", plain):
-        return None  # a clue that happens to contain the word
-    if re.fullmatch(r"\W*ACROSS\W*", plain) or re.search(r"\bACROSS\b", plain) and "|" in text:
-        return "across"
-    if re.fullmatch(r"\W*DOWN\W*", plain) or re.search(r"\bDOWN\b", plain) and "|" in text:
-        return "down"
+    """A heading line or table row: 'ACROSS', '**Down**', '|  | **ACROSS** | notes |'.
+
+    One cell must be exactly the word. A row that merely mentions it ("See 20
+    Down", "to set down") is not a heading; treating it as one flipped the
+    direction of every clue after it.
+    """
+    cells = _cells(text) if text.lstrip().startswith("|") else [text]
+    for cell in cells:
+        plain = strip_markup(cell).upper()
+        if re.fullmatch(r"\W*ACROSS\W*", plain):
+            return "across"
+        if re.fullmatch(r"\W*DOWN\W*", plain):
+            return "down"
     return None
 
 

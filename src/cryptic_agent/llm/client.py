@@ -23,6 +23,8 @@ from cryptic_agent import config
 
 logger = logging.getLogger(__name__)
 
+MINUTE_LIMIT_WAIT = 60  # seconds: the per-minute token budget refills fully in this time
+
 Message = dict[str, Any]
 Effort = Literal["low", "medium", "high"]  # how much a reasoning model thinks first
 
@@ -46,6 +48,11 @@ class Usage:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def answer_tokens(self) -> int:
+        """What the model visibly wrote: its output minus its hidden reasoning."""
+        return self.completion_tokens - self.reasoning_tokens
 
 
 @dataclass(frozen=True)
@@ -204,7 +211,17 @@ class GroqClient:
                 "json_schema": {"name": "response", "strict": True, "schema": dict(json_schema)},
             }
         try:
-            raw = self._client.chat.completions.with_raw_response.create(**kwargs)
+            try:
+                raw = self._client.chat.completions.with_raw_response.create(**kwargs)
+            except groq.RateLimitError as exc:
+                if "per day" in str(exc):
+                    raise
+                # Still limited after the SDK's retries, but only per minute: that
+                # clears by itself, so wait it out once rather than stop the run.
+                logger.info("per-minute limit: waiting %ds", MINUTE_LIMIT_WAIT)
+                self.budget.sleep(MINUTE_LIMIT_WAIT)
+                self.totals.waited_seconds += MINUTE_LIMIT_WAIT
+                raw = self._client.chat.completions.with_raw_response.create(**kwargs)
         except groq.BadRequestError as exc:
             # Groq validates the model's output server-side and rejects a reply
             # that breaks the request: a JSON schema mismatch (sometimes an empty
@@ -215,7 +232,7 @@ class GroqClient:
             if "tool_use_failed" in str(exc):
                 raise InvalidToolCallError(str(exc)) from exc
             raise LLMError(str(exc)) from exc
-        except groq.RateLimitError as exc:  # still limited after the SDK's retries
+        except groq.RateLimitError as exc:  # the daily quota, or still limited after waiting
             raise RateLimitedError(str(exc)) from exc
         except groq.APIError as exc:  # timeouts, 5xx after retries
             raise LLMError(f"{type(exc).__name__}: {exc}") from exc

@@ -167,6 +167,53 @@ def test_running_out_of_quota_is_its_own_error() -> None:
     assert len(fake.requests) == 6
 
 
+def minute_limited() -> httpx.Response:
+    return httpx.Response(
+        429,
+        headers={"retry-after-ms": "1"},
+        json={"error": {"message": "Rate limit reached ... tokens per minute (TPM): Limit 8000"}},
+    )
+
+
+def test_a_per_minute_limit_is_waited_out_once() -> None:
+    clock = FakeClock()
+    fake = FakeGroq(
+        *[minute_limited() for _ in range(6)],  # the first try plus 5 SDK retries
+        httpx.Response(200, json=chat_response({"role": "assistant", "content": "TREASON"})),
+    )
+    client = make_client(fake, TokenBudget(clock=clock, sleep=clock.sleep))
+
+    reply = client.complete([{"role": "user", "content": "x"}])
+
+    assert reply.content == "TREASON"
+    assert clock.sleeps == [60]
+    assert client.totals.waited_seconds == 60
+
+
+def test_still_limited_after_waiting_stops_the_run() -> None:
+    clock = FakeClock()
+    fake = FakeGroq(*[minute_limited() for _ in range(12)])
+    client = make_client(fake, TokenBudget(clock=clock, sleep=clock.sleep))
+
+    with pytest.raises(RateLimitedError):
+        client.complete([{"role": "user", "content": "x"}])
+    assert clock.sleeps == [60]  # waited once, then gave up
+
+
+def test_the_daily_limit_is_not_waited_out() -> None:
+    clock = FakeClock()
+    daily = httpx.Response(
+        429,
+        headers={"retry-after-ms": "1"},
+        json={"error": {"message": "Rate limit reached ... on tokens per day (TPD)"}},
+    )
+    client = make_client(FakeGroq(*[daily] * 6), TokenBudget(clock=clock, sleep=clock.sleep))
+
+    with pytest.raises(RateLimitedError):
+        client.complete([{"role": "user", "content": "x"}])
+    assert clock.sleeps == []
+
+
 def test_reasoning_tokens_are_read_from_the_response() -> None:
     body = chat_response({"role": "assistant", "content": "TREASON"})
     body["usage"] = {
@@ -181,6 +228,7 @@ def test_reasoning_tokens_are_read_from_the_response() -> None:
     )
 
     assert reply.usage == Usage(prompt_tokens=90, completion_tokens=80, reasoning_tokens=69)
+    assert reply.usage.answer_tokens == 11
 
 
 def test_reasoning_effort_is_sent_when_asked() -> None:

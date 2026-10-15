@@ -261,3 +261,24 @@ def test_colour_on_a_whole_clue_or_definition_is_not_an_indicator(markup: str) -
 )
 def test_type_hints_from_plain_opening_words(parsing: str, hints: list[str]) -> None:
     assert type_hints_from(parsing) == hints
+
+
+def test_rows_that_only_mention_a_direction_are_not_headings() -> None:
+    # Seen in real posts: cross-references and explanations containing "down".
+    table = """\
+| ACROSS |
+| 6 | TWINKLETOES | See 20 Down |
+| 9 | Head of ranch in orange-pink <u>cattle pen</u> (6) | CORRAL |
+|  | R[anch] in CORAL, to set down the letters |  |
+| 11 | Senator arranged <u>crime</u> (7) | TREASON |
+| DOWN |
+| 2 | <u>Mountain</u> observed in severe storm (7) | EVEREST |
+"""
+
+    clues = parse_clue_table(post(table))
+
+    assert [(c.answer, c.direction) for c in clues] == [
+        ("CORRAL", "across"),
+        ("TREASON", "across"),  # was "down": two rows above mention the word
+        ("EVEREST", "down"),
+    ]

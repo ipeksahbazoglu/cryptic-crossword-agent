@@ -11,11 +11,13 @@ tokens, so it is tried first, under rules that keep it from being over-confident
     assembled and verified, code does not guess; the clue goes to the model.
 """
 
+from collections.abc import Collection
 from typing import Literal
 
 from cryptic_agent.agent.fastpass import Candidate, FastPass, Span, clue_words
 from cryptic_agent.agent.verify import Verdict, verify
 from cryptic_agent.agent.worksheet import Worksheet, WorksheetDefinition, WorksheetStep
+from cryptic_agent.lexicon.store import Lexicon
 from cryptic_agent.models import normalize_phrase
 from cryptic_agent.tools.dictionary import Dictionary
 
@@ -90,15 +92,25 @@ def _worksheets(candidate: Candidate, words: list[str]) -> list[Worksheet]:
 def solve_by_code(
     found: FastPass,
     dictionary: Dictionary,
+    lexicon: Lexicon,
     *,
     pattern: str | None = None,
+    exclude_urls: Collection[str] = (),
 ) -> tuple[Worksheet, Verdict] | None:
     """A confirmed worksheet if code alone explains the clue unambiguously, else None."""
     words = clue_words(found.clue)
     confirmed: dict[str, tuple[Worksheet, Verdict]] = {}
     for candidate in found.strong:
         for sheet in _worksheets(candidate, words):
-            verdict = verify(sheet, found.clue, found.enumeration, dictionary, pattern=pattern)
+            verdict = verify(
+                sheet,
+                found.clue,
+                found.enumeration,
+                dictionary,
+                pattern=pattern,
+                lexicon=lexicon,
+                exclude_urls=exclude_urls,
+            )
             if verdict.status == "confirmed":
                 confirmed.setdefault(verdict.answer, (sheet, verdict))
     if len(confirmed) == 1:

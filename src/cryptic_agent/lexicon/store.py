@@ -22,14 +22,14 @@ from importlib import resources
 from pathlib import Path
 
 from cryptic_agent import config
-from cryptic_agent.models import normalize_answer, normalize_phrase
+from cryptic_agent.models import normalize_phrase
 
 
 class LexiconNotFoundError(RuntimeError):
     """The lexicon database has not been built yet."""
 
 
-# The cryptics dataset's mechanism names -> ours (models.ComponentType).
+# The cryptics dataset's mechanism names -> ours (see agent/worksheet.py Mechanism).
 WORDPLAY_NAMES = {
     "anagram": "anagram",
     "container": "container",
@@ -174,9 +174,3 @@ class Lexicon:
     def extra_words(self) -> list[str]:
         """Words to add to the dictionary: well-attested past answers and repaired UKACD entries."""
         return [word for (word,) in self._con.execute("SELECT word FROM words")]
-
-    def is_known_answer(self, answer: str) -> bool:
-        row = self._con.execute(
-            "SELECT 1 FROM words WHERE word = ?", (normalize_answer(answer),)
-        ).fetchone()
-        return row is not None

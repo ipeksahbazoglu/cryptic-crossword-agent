@@ -70,6 +70,8 @@ def test_excluded_puzzles_reach_the_tools(lexicon: Lexicon, guardian_urls: list[
         ("find_anagrams", {"_raw": "{bad"}, "not valid JSON"),
         ("find_anagrams", {"wrong": "x"}, "TypeError"),
         ("check_hidden_word", {"text": "abc", "length": 0}, "ValueError"),
+        ("find_anagrams", {"letters": 123}, "AttributeError"),  # a number where text belongs
+        ("definition_answers", {"phrase": None}, "AttributeError"),
     ],
 )
 def test_problems_come_back_as_errors_the_model_can_read(
