@@ -230,6 +230,55 @@ def test_coloured_paragraph_layout() -> None:
     assert cream.parsing == '"scream" minus its 1st letter.'  # not run into the next clue
 
 
+# The closing colour tag lands on the next line (one blogger, 2014-2025).
+SPLIT_COLOUR_PARAGRAPHS = """\
+**Across**
+
+<color=blue>1. Search old parts belonging to <u>record</u> (8,4)
+</color>
+
+<color=#c00000>**QUESTION MARK**</color> : QUEST + O ***contained in***(parts) IN + MARK.
+
+<color=blue>8. Throwing lines on river catching a <u>fish</u> (7)
+</color>
+
+<color=#c00000>**ROACHES**</color> : OCHES ***placed after*** R ***containing*** A.
+"""
+
+
+def test_paragraphs_whose_colour_closes_on_the_next_line() -> None:
+    question_mark, roaches = parse_clues(paragraph_post(SPLIT_COLOUR_PARAGRAPHS))
+
+    assert (question_mark.number, question_mark.answer) == (1, "QUESTIONMARK")
+    assert question_mark.clue_text == "Search old parts belonging to record"
+    assert (roaches.enumeration, roaches.definitions) == ("7", ["fish"])
+    assert roaches.parsing.startswith("OCHES")  # not run into the next clue
+
+
+# Colour on the clue number too; the clue's ordinary words coloured in pieces (2020-).
+COLOURED_NUMBERS = """\
+| ACROSS | | |
+| <color=#8b008b>1</color> | <color=#8b008b>ESTHER</color> | <color=#0000ff>Atmosphere surrounding son and </color><color=#b8860b><u>woman</u></color><color=#0000ff> (6)</color> |
+|  | | An envelope (‘surrounding’) of S (‘son’) in ETHER (‘atmosphere’). |
+"""
+
+
+def test_table_with_coloured_numbers() -> None:
+    (esther,) = parse_clue_table(post(COLOURED_NUMBERS))
+
+    assert (esther.number, esther.direction, esther.answer) == (1, "across", "ESTHER")
+    assert esther.definitions == ["woman"]
+    assert esther.indicators == []  # the blue is styling: it covers every non-definition word
+
+
+def test_a_palindrome_indicator_is_kept_though_nothing_else_is_plain() -> None:
+    table = "| 1 | <u>**Uniform**</u> <color=red>shown in mirror?</color> (5) | Answer LEVEL |\n"
+
+    (level,) = parse_clue_table(post(table))
+
+    assert level.indicators == ["shown in mirror"]
+
+
 def test_tables_are_preferred_when_present() -> None:
     assert [c.answer for c in parse_clues(post(CURRENT))] == ["CHOP", "MERINGUES", "BAR"]
 
@@ -239,6 +288,8 @@ def test_tables_are_preferred_when_present() -> None:
     [
         "<color=#ff0000><u>One whose number is up, having rounded Lido recklessly?</u></color>",
         "<color=#4682b4><u>This marine</u> is deeply blue</color>",  # colour wraps a definition
+        # every word outside the definition coloured, in pieces
+        "<color=#00f>One whose </color><u>number is up</u><color=#00f>, rounded Lido</color>",
     ],
 )
 def test_colour_on_a_whole_clue_or_definition_is_not_an_indicator(markup: str) -> None:
