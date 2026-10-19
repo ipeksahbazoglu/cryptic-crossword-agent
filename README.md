@@ -72,6 +72,42 @@ uv run cryptic-agent eval --n 30 --seed 42 --since 2023-01-01
 Three notebooks in `demos/` walk through it (run `uv sync --group demo` first):
 the data, the agent solving clues step by step, and where the tokens go.
 
+## Use it from Claude (MCP)
+
+`cryptic-agent mcp` serves the solver's tools over the
+[Model Context Protocol](https://modelcontextprotocol.io), so Claude can solve clues
+with them. Claude does the reasoning; your machine supplies the dictionary, the
+660,000 past clues and the checks. Nothing but tool results leaves it, and no Groq
+key is needed.
+
+- **Tools:** `fast_pass` (candidates code finds alone), `verify_parse` (the code-checked
+  verdict, and the only way an answer becomes "confirmed"), and the agent's nine
+  lookup and wordplay tools.
+- **Prompt:** `solve_cryptic` gives Claude the method step by step.
+
+**Claude Code:** open this repo and accept the `cryptic-crossword` server from
+`.mcp.json`, or add it anywhere with:
+
+```bash
+claude mcp add cryptic-crossword -- uv --directory /path/to/cryptic-agent run cryptic-agent mcp
+```
+
+**Claude Desktop:** add to `claude_desktop_config.json` and restart:
+
+```json
+{
+  "mcpServers": {
+    "cryptic-crossword": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cryptic-agent", "run", "cryptic-agent", "mcp"]
+    }
+  }
+}
+```
+
+Run `uv run cryptic-agent ingest` first; the server stops at startup with that hint
+if the lexicon is missing.
+
 ## Measuring it honestly
 
 `eval` solves a fixed, reproducible sample of clues with known answers, spread

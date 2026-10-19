@@ -5,6 +5,7 @@ return a process exit code; stage logic lives in its own module, not here.
 """
 
 import argparse
+import asyncio
 import logging
 import sys
 import textwrap
@@ -34,6 +35,7 @@ from cryptic_agent.lexicon.sources import CRYPTICS, MOBY, SOURCES, ChecksumMisma
 from cryptic_agent.lexicon.store import Lexicon, LexiconNotFoundError
 from cryptic_agent.lexicon.store import default_path as lexicon_path
 from cryptic_agent.llm.client import GroqClient, RateLimitedError
+from cryptic_agent.mcp_server import serve
 from cryptic_agent.scraper.client import MAX_PER_PAGE, CategoryNotFoundError, WordPressClient
 from cryptic_agent.scraper.scrape import output_path, scrape_category
 from cryptic_agent.tools.dictionary import Dictionary, DictionaryNotFoundError
@@ -212,10 +214,19 @@ def _evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp(args: argparse.Namespace) -> int:
+    try:
+        asyncio.run(serve())
+    except (LexiconNotFoundError, DictionaryNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)  # stderr: stdout belongs to the protocol
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptic-agent",
-        description="Scrape, solve and evaluate UK cryptic crossword clues.",
+        description="Scrape, solve and evaluate UK cryptic crossword clues; serve them over MCP.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -258,6 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="tiered: code, then one call, then the agent (default). agent: always the agent.",
     )
     solve.set_defaults(handler=_solve)
+
+    mcp = subparsers.add_parser(
+        "mcp", help="Serve the solver's tools to Claude or another MCP client (stdio)."
+    )
+    mcp.set_defaults(handler=_mcp)
 
     evaluate = subparsers.add_parser("eval", help="Score the solver on real scraped clues.")
     evaluate.add_argument("--n", type=int, default=50, help="Number of clues to solve.")
