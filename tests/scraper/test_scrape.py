@@ -23,7 +23,7 @@ class FakeWordPress(WordPressClient):
         return 56
 
     def iter_posts(
-        self, category_id: int, *, max_pages: int, per_page: int = 100
+        self, category_id: int, *, max_pages: int | None, per_page: int = 100
     ) -> Iterator[dict[str, Any]]:
         yield from self.posts
 
@@ -71,3 +71,28 @@ def test_rescrape_keeps_posts_no_longer_fetched(
     summary = scrape_category(FakeWordPress(raw_posts[:1]), "qc", max_pages=1, out_path=out)
 
     assert summary.total == 2
+
+
+def test_refresh_stops_at_the_first_post_already_saved(
+    tmp_path: Path, raw_posts: list[dict[str, Any]]
+) -> None:
+    out = tmp_path / "qc.jsonl"
+    newer, older = raw_posts
+    scrape_category(FakeWordPress([older]), "qc", max_pages=None, out_path=out)
+    archive = FakeWordPress([newer, older, {"id": "never read"}])
+
+    summary = scrape_category(archive, "qc", max_pages=None, out_path=out)
+
+    assert (summary.fetched, summary.new, summary.total) == (1, 1, 2)
+
+
+def test_a_page_count_fetches_past_saved_posts_to_backfill(
+    tmp_path: Path, raw_posts: list[dict[str, Any]]
+) -> None:
+    out = tmp_path / "qc.jsonl"
+    newer, older = raw_posts
+    scrape_category(FakeWordPress([newer]), "qc", max_pages=None, out_path=out)
+
+    summary = scrape_category(FakeWordPress([newer, older]), "qc", max_pages=2, out_path=out)
+
+    assert (summary.fetched, summary.new, summary.total) == (2, 1, 2)

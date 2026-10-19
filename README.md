@@ -63,7 +63,7 @@ uv run cryptic-agent solve --clue "Cook using mere sweet desserts" --enumeration
 uv run cryptic-agent solve --clue "Mountain observed in severe storm" --enumeration 7 --pattern "E?E?E?T"
 
 # download explained puzzles from Fifteensquared (test data; no AI involved)
-uv run cryptic-agent scrape --category guardian --pages 70
+uv run cryptic-agent scrape --category guardian   # first run: the whole archive; later: only new posts
 
 # measure the solver on real clues it has not seen
 uv run cryptic-agent eval --n 30 --seed 42 --since 2023-01-01
