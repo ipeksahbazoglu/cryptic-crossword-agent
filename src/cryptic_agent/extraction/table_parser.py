@@ -184,10 +184,27 @@ def _indicator_spans(clue_markup: str, clue_text: str, definitions: list[str]) -
     defs = [normalize_phrase(d) for d in definitions]
     return [
         span
-        for span in _spans(_COLOR, clue_markup)
+        for span in _spans(_COLOR, _drop_styling_colors(clue_markup))
         if normalize_phrase(span) != clue
         and not any(d and f" {d} " in f" {normalize_phrase(span)} " for d in defs)
     ]
+
+
+def _drop_styling_colors(clue_markup: str) -> str:
+    """Remove colours a blogger used for the clue's ordinary words, keeping the text.
+
+    Some colour every word outside the definition, in pieces:
+    '<color=blue>Unhappy about ... </color><u>record stores</u><color=blue>'. A colour
+    is styling when it comes in pieces and no plain word lies outside it and the
+    definitions. One piece can be a real indicator with no fodder beside it:
+    '<u>Uniform</u> <color=red>shown in mirror?</color>' (LEVEL, a palindrome).
+    """
+    colors = re.findall(r"<color=([^>]+)>", clue_markup)
+    for color in {c for c in colors if colors.count(c) > 1}:
+        tag = re.compile(rf"<color={re.escape(color)}>(.*?)</color>", re.S)
+        if not normalize_phrase(strip_markup(_UNDERLINE.sub("", tag.sub("", clue_markup)))):
+            clue_markup = tag.sub(r"\1", clue_markup)
+    return clue_markup
 
 
 def _make_clue(
@@ -251,7 +268,7 @@ def parse_clue_table(post: RawPost) -> list[ParsedClue]:
             direction = header
             continue
 
-        number_match = re.match(r"^(\d+)", cells[0]) if cells else None
+        number_match = re.match(r"^(\d+)", strip_markup(cells[0])) if cells else None
         if number_match is None:
             continue
 
@@ -310,7 +327,9 @@ def parse_clue_paragraphs(post: RawPost) -> list[ParsedClue]:
     """
     clues: list[ParsedClue] = []
     direction: Literal["across", "down"] | None = None
-    lines = [line for line in post.content_markdown.splitlines() if line.strip()]
+    # Some posts close a clue's colour on the next line ("...(8,4)\n</color>"): rejoin it.
+    content = re.sub(r"\n\s*</color>", "</color>", post.content_markdown)
+    lines = [line for line in content.splitlines() if line.strip()]
 
     i = 0
     while i < len(lines):
