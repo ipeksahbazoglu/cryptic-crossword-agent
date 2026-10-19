@@ -5,6 +5,7 @@ anagram indicator), so nothing here needs the network or a model.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp import StdioServerParameters
+from mcp import MCPError, StdioServerParameters
 from mcp.client import Client
 
 from cryptic_agent.agent.tools import Toolbox
@@ -92,6 +93,23 @@ async def test_solve_prompt_carries_the_method_and_the_clue(client: Client) -> N
     assert "E???" in text and "verify_parse" in text
 
 
+async def test_a_clue_split_into_words_gets_a_clear_prompt_error(client: Client) -> None:
+    # What Claude Code sends for "/...solve_cryptic Middle Easterner first ... (5)":
+    # one word per argument.
+    async with client:
+        with pytest.raises(MCPError, match="/solve-cryptic"):
+            await client.get_prompt(
+                "solve_cryptic", {"clue": "Middle", "enumeration": "Easterner", "pattern": "first"}
+            )
+
+
+def test_the_claude_code_skill_names_tools_the_server_serves(lexicon: Lexicon) -> None:
+    skill = (Path(__file__).parent.parent / ".claude/skills/solve-cryptic/SKILL.md").read_text()
+    served = {*Toolbox(DICTIONARY, lexicon).tools, "fast_pass", "verify_parse"}
+
+    assert set(re.findall(r"`([a-z_]+)`", skill)) - {"pattern"} <= served
+
+
 # --- the tools ------------------------------------------------------------------------
 
 
@@ -125,6 +143,7 @@ async def test_verify_parse_gives_the_code_checked_verdict(
     [
         ("find_anagrams", {}, "'letters' is a required property"),
         ("find_anagrams", {"letters": 123}, "123 is not of type 'string'"),
+        ("fast_pass", {"clue": "Middle", "enumeration": "Easterner"}, "'Easterner' does not match"),
         ("verify_parse", {**CLUE, "worksheet": {"answer": "EROS"}}, "is a required property"),
         ("solve_it_for_me", {}, "Unknown tool 'solve_it_for_me'"),
     ],
