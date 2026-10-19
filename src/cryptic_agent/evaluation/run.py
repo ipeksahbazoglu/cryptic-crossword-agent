@@ -17,13 +17,14 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
 from cryptic_agent.agent.solver import Solver, SolveResult
 from cryptic_agent.agent.tools import Toolbox
-from cryptic_agent.extraction.table_parser import ParsedClue, parse_clue_table
+from cryptic_agent.extraction.table_parser import ParsedClue, parse_clues
 from cryptic_agent.jsonl import append_jsonl, read_jsonl
 from cryptic_agent.llm.client import RateLimitedError
 from cryptic_agent.models import RawPost
@@ -49,6 +50,7 @@ class ResultRow(BaseModel):
     seconds: float
     pattern: str | None = None
     error: str = ""
+    tier: int | None = None  # 0 code only, 1 one model call, 2 the agent
 
 
 def clue_key(clue: ParsedClue) -> str:
@@ -59,11 +61,25 @@ def kind_of(clue: ParsedClue) -> str:
     return clue.type_hints[0] if len(clue.type_hints) == 1 else "unmarked"
 
 
-def load_clues(posts: Iterable[RawPost]) -> list[ParsedClue]:
-    """Every parsed clue, de-duplicated by key (a few posts repeat a clue)."""
+# Easier puzzle series, kept out of evaluations of full cryptics.
+EASY_SERIES = ("quiptic", "quick cryptic")
+
+
+def load_clues(
+    posts: Iterable[RawPost], *, since: date | None = None, full_cryptics_only: bool = False
+) -> list[ParsedClue]:
+    """Every parsed clue, de-duplicated by key (a few posts repeat a clue).
+
+    since: only puzzles published on or after this date.
+    full_cryptics_only: leave out the easier series (Quiptic, Quick Cryptic).
+    """
     clues: dict[str, ParsedClue] = {}
     for post in posts:
-        for clue in parse_clue_table(post):
+        if since and post.date.date() < since:
+            continue
+        if full_cryptics_only and any(s in post.title.lower() for s in EASY_SERIES):
+            continue
+        for clue in parse_clues(post):
             clues.setdefault(clue_key(clue), clue)
     return list(clues.values())
 
@@ -110,6 +126,7 @@ def to_row(clue: ParsedClue, result: SolveResult, seconds: float, pattern: str |
         seconds=round(seconds, 1),
         pattern=pattern,
         error=result.error[:300],
+        tier=result.tier,
     )
 
 
@@ -154,6 +171,7 @@ class Summary:
     by_kind: dict[str, tuple[int, int]]
     confirmed_wrong: list[ResultRow]
     tokens: int
+    by_tier: dict[str, tuple[int, int, int]]  # tier -> (right, total, tokens)
 
 
 def summarise(rows: Sequence[ResultRow]) -> Summary:
@@ -171,7 +189,23 @@ def summarise(rows: Sequence[ResultRow]) -> Summary:
         by_kind=tally(lambda r: r.kind),
         confirmed_wrong=[r for r in rows if r.status == "confirmed" and not r.right],
         tokens=sum(r.tokens for r in rows),
+        by_tier={
+            label: (
+                sum(r.right for r in group),
+                len(group),
+                sum(r.tokens for r in group),
+            )
+            for label, group in _group_by_tier(rows).items()
+        },
     )
+
+
+def _group_by_tier(rows: Sequence[ResultRow]) -> dict[str, list[ResultRow]]:
+    labels = {0: "tier 0 (code)", 1: "tier 1 (one call)", 2: "tier 2 (agent)", None: "no tier"}
+    groups: dict[str, list[ResultRow]] = {}
+    for row in sorted(rows, key=lambda r: -1 if r.tier is None else r.tier):
+        groups.setdefault(labels.get(row.tier, f"tier {row.tier}"), []).append(row)
+    return groups
 
 
 def format_report(summary: Summary) -> str:
@@ -194,6 +228,12 @@ def format_report(summary: Summary) -> str:
         "",
         f"Tokens: {summary.tokens:,} ({summary.tokens // max(summary.total, 1):,} per clue)",
     ]
+    if any(label != "no tier" for label in summary.by_tier):
+        lines += ["", "By tier (answered there; tokens include earlier tiers):"]
+        for label, (right, total, tokens) in summary.by_tier.items():
+            lines.append(
+                f"  {label:<18} {pct(right, total)}  {tokens // max(total, 1):>6,} tokens/clue"
+            )
     return "\n".join(lines)
 
 
