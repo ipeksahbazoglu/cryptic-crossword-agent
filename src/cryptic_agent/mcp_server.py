@@ -14,12 +14,13 @@ schema here: the SDK passes them through unchecked.
 """
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from mcp import types
+from mcp import MCPError, types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 from pydantic import ValidationError
@@ -40,9 +41,16 @@ use the other tools to test ideas, then call verify_parse with your full parse.
 Never present an answer as confirmed unless verify_parse returned "confirmed";
 otherwise say it is pencilled in and why."""
 
+# '7', '3,4', '5-3', '(2, 3)': what enumeration_lengths() can read.
+ENUMERATION = r"^\(?\s*\d+(\s*[,\-\u2013]\s*\d+)*\s*\)?$"
+
 CLUE_ARGS: dict[str, Any] = {
     "clue": {"type": "string", "description": "The clue, without the enumeration."},
-    "enumeration": {"type": "string", "description": "Answer word lengths, e.g. '7' or '3,4'."},
+    "enumeration": {
+        "type": "string",
+        "pattern": ENUMERATION,
+        "description": "Answer word lengths, e.g. '7' or '3,4'.",
+    },
     "pattern": {
         "type": "string",
         "description": "Optional letters from crossing answers, '?' for unknown, e.g. 'T?E?S?N'.",
@@ -143,6 +151,10 @@ def build_server(dictionary: Dictionary, lexicon: Lexicon) -> Server[Any]:
             return error(f"{params.name} failed unexpectedly; see the server log.")
         return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
+    def invalid(message: str) -> MCPError:
+        # The SDK hides other exceptions as "Internal server error"; this one reaches the user.
+        return MCPError(code=types.INVALID_PARAMS, message=message)
+
     async def list_prompts(ctx: Any, params: Any) -> types.ListPromptsResult:
         return types.ListPromptsResult(
             prompts=[
@@ -161,7 +173,13 @@ def build_server(dictionary: Dictionary, lexicon: Lexicon) -> Server[Any]:
     async def get_prompt(ctx: Any, params: types.GetPromptRequestParams) -> types.GetPromptResult:
         args = params.arguments or {}
         if params.name != "solve_cryptic" or not args.get("clue") or not args.get("enumeration"):
-            raise ValueError("solve_cryptic needs a clue and an enumeration")
+            raise invalid("solve_cryptic needs a clue and an enumeration")
+        if not re.match(ENUMERATION, args["enumeration"]):
+            # Claude Code splits prompt arguments on spaces, so a multi-word clue lands here.
+            raise invalid(
+                f"enumeration should be word lengths like '5' or '3,4', got "
+                f"{args['enumeration']!r}. In Claude Code, use /solve-cryptic <clue> (<enum>)."
+            )
         text = (
             f"{METHOD}\n\n{INSTRUCTIONS}\n\n"
             f"{clue_prompt(args['clue'], args['enumeration'], args.get('pattern') or None)}"

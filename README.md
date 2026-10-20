@@ -83,7 +83,13 @@ key is needed.
 - **Tools:** `fast_pass` (candidates code finds alone), `verify_parse` (the code-checked
   verdict, and the only way an answer becomes "confirmed"), and the agent's nine
   lookup and wordplay tools.
-- **Prompt:** `solve_cryptic` gives Claude the method step by step.
+- **Prompt:** `solve_cryptic` gives Claude the method step by step (clue and
+  enumeration as separate fields, as Claude Desktop shows them).
+
+In Claude Code, type `/solve-cryptic Middle Easterner first to suffer actual
+unpleasantness dating Iraqi (5)` (a project skill in `.claude/skills/`), or just ask.
+Claude Code splits an MCP prompt's arguments on spaces, so the skill, not the
+prompt, is the way to pass a whole clue there.
 
 **Claude Code:** open this repo and accept the `cryptic-crossword` server from
 `.mcp.json`, or add it anywhere with:

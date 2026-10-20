@@ -47,3 +47,6 @@ data/runs/
 # --- Logs / eval output ---
 *.log
 eval_failures.json
+
+# personal Claude Code settings (e.g. which .mcp.json servers you approved)
+.claude/settings.local.json
