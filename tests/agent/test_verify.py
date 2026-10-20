@@ -304,3 +304,127 @@ def test_acrostic_with_hyphenated_enumeration() -> None:
 )
 def test_matches_pattern(answer: str, pattern: str, fits: bool) -> None:
     assert matches_pattern(answer, pattern) is fits
+
+
+# --- deletions, and steps that work on an earlier step's letters ---------------------
+
+SUBTRACTIVE = "Trade documentaries with aim to leave without a partner"
+WITH_UNESCORTED = Dictionary(["unescorted", "rain"])
+
+
+def subtractive(
+    deletion_fodder: str = "documentaries aim", left: str = "DOCUENTRES", **overrides: Any
+) -> Worksheet:
+    fields: dict[str, Any] = {
+        "answer": "UNESCORTED",
+        "definitions": [{"text": "without a partner", "position": "end"}],
+        "wordplay": [
+            {
+                "mechanism": "deletion",
+                "indicator": "to leave",
+                "fodder": deletion_fodder,
+                "produces": left,
+                "explanation": "AIM taken out of DOCUMENTARIES",
+            },
+            {
+                "mechanism": "anagram",
+                "indicator": "Trade",
+                "fodder": left,
+                "produces": "UNESCORTED",
+                "explanation": "those letters rearranged",
+            },
+        ],
+        "link_words": ["with"],
+    }
+    fields.update(overrides)
+    return worksheet(**fields)
+
+
+def step_results(verdict: Verdict) -> list[bool | None]:
+    return [c.passed for c in verdict.checks if c.name.startswith("wordplay:")]
+
+
+def test_a_subtractive_anagram_is_confirmed_step_by_step() -> None:
+    verdict = verify(subtractive(), SUBTRACTIVE, "10", WITH_UNESCORTED)
+
+    assert verdict.status == "confirmed"
+    assert step_results(verdict) == [True, True]  # DOCUENTRES needs no clue words of its own
+
+
+def test_a_subtractive_anagram_with_another_real_answer_needs_the_definition() -> None:
+    both = Dictionary(["unescorted", "uncorseted"])  # same letters
+
+    verdict = verify(subtractive(), SUBTRACTIVE, "10", both)
+
+    assert verdict.status == "pencilled"
+
+
+def test_a_step_built_on_unchecked_letters_is_unchecked() -> None:
+    # "aims" isn't in the clue, so nothing proves DOCUENTRES; the anagram can't prove more.
+    verdict = verify(subtractive("documentaries aims"), SUBTRACTIVE, "10", WITH_UNESCORTED)
+
+    assert verdict.status == "pencilled"
+    assert step_results(verdict)[1] is None
+
+
+def test_a_deletion_the_code_cant_follow_says_how_to_fix_it() -> None:
+    # The word "with" given as fodder: is it removed, or a link word? Code can't tell.
+    verdict = verify(
+        subtractive("documentaries with aim", link_words=[]),
+        SUBTRACTIVE,
+        "10",
+        WITH_UNESCORTED,
+    )
+
+    assert verdict.status == "pencilled"
+    assert any("the word and the word removed" in c.detail for c in verdict.checks)
+
+
+def headless(fodder: str, produces: str) -> Worksheet:
+    return worksheet(
+        answer="RAIN",
+        definitions=[{"text": "wet weather", "position": "end"}],
+        wordplay=[
+            {
+                "mechanism": "deletion",
+                "indicator": "headless",
+                "fodder": fodder,
+                "produces": produces,
+                "explanation": "first letter removed",
+            }
+        ],
+        link_words=["getting"],
+    )
+
+
+def test_a_headless_word_is_confirmed() -> None:
+    clue = "Brain headless getting wet weather"
+
+    verdict = verify(headless("Brain", "RAIN"), clue, "4", WITH_UNESCORTED)
+
+    assert verdict.status == "confirmed"
+
+
+@pytest.mark.parametrize(
+    ("fodder", "produces"),
+    [
+        ("Brain", "BAIN"),  # a letter from the middle: code can't tell how
+        ("Bird", "RAIN"),  # letters from a synonym of the fodder, not the fodder
+    ],
+)
+def test_other_deletions_are_unchecked_never_failed(fodder: str, produces: str) -> None:
+    clue = f"{fodder} headless getting wet weather"
+
+    verdict = verify(headless(fodder, produces), clue, "4", WITH_UNESCORTED)
+
+    assert step_results(verdict) == [None]  # can't tell, so it neither confirms nor blocks
+
+
+def test_scattered_letters_come_out_only_before_an_anagram() -> None:
+    alone = subtractive()
+    deletion_only = alone.model_copy(update={"wordplay": alone.wordplay[:1]})
+
+    verdict = verify(deletion_only, SUBTRACTIVE, "10", WITH_UNESCORTED)
+
+    # A, I, M are scattered through DOCUMENTARIES: fine to shuffle next, not as an answer.
+    assert step_results(verdict) == [None]

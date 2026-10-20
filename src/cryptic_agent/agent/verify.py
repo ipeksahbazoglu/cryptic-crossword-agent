@@ -12,6 +12,10 @@ Otherwise it is PENCILLED (fits, but not proven) or UNSURE (doesn't even fit).
 
 A check's `passed` is True, False, or None for "code can't tell" (e.g. a charade
 built from synonyms): None never confirms, but never blocks either.
+
+A step can work on an earlier step's letters ("documentaries" minus AIM, then an
+anagram of DOCUENTRES): its fodder is that step's `produces`. It is checked only as
+far as the step it builds on: unchecked letters in, unchecked letters out.
 """
 
 from collections import Counter
@@ -65,11 +69,63 @@ def _in_clue(clue: str, phrase: str) -> bool:
     )
 
 
-def _check_step(step: WorksheetStep, clue: str) -> Check:
-    """Verify one wordplay step mechanically, where its mechanism allows that."""
+def _check_deletion(step: WorksheetStep, feeds_anagram: bool) -> tuple[bool | None, str]:
+    """A word with letters taken out: its first or last ('headless'), or another clue
+    word's ('documentaries' minus 'aim'). Fodder is the word, then any word removed.
+
+    Letters that a later anagram will shuffle need only be present; otherwise the
+    removed letters must be one unbroken run. Never False: the letters may come from
+    a synonym of the fodder ('Bird almost' = TER(N)), which code can't see.
+    """
+    words = [w for w in (normalize_answer(w) for w in step.fodder.split()) if w]
+    produces = normalize_answer(step.produces)
+
+    def taken_from(word: str) -> bool:
+        return len(word) > len(produces) and not Counter(produces) - Counter(word)
+
+    if len(words) > 2:
+        return None, "can't be checked: give the fodder as the word and the word removed"
+    if not produces or not any(taken_from(w) for w in words):
+        return None, "letters not taken from the fodder as written: perhaps from a synonym"
+    if len(words) == 1:
+        if produces in {words[0][1:], words[0][:-1], words[0][1:-1]}:
+            return True, "first or last letters removed"
+        return None, "letters removed some other way: can't be checked by code yet"
+    for word, removed in (words, words[::-1]):
+        shuffled = feeds_anagram and Counter(word) - Counter(removed) == Counter(produces)
+        in_order = removed in word and word.replace(removed, "", 1) == produces
+        if (shuffled and not Counter(removed) - Counter(word)) or in_order:
+            return True, f"{removed} taken out of {word}"
+    return None, "not one word taken out of the other: perhaps an abbreviation"
+
+
+def _check_step(
+    step: WorksheetStep,
+    clue: str,
+    *,
+    builds_on: Check | None = None,
+    feeds_anagram: bool = False,
+) -> Check:
+    """Verify one wordplay step mechanically, where its mechanism allows that.
+
+    `builds_on` is the check of the earlier step whose letters this one works on.
+    """
     name = f"wordplay: {step.mechanism} of {step.fodder!r}"
+    check = _check_mechanics(
+        step, clue, name, chained=builds_on is not None, feeds_anagram=feeds_anagram
+    )
+    if builds_on is not None and check.passed and not builds_on.passed:
+        return Check(
+            name=name, passed=None, detail=f"{check.detail}, but builds on an unchecked step"
+        )
+    return check
+
+
+def _check_mechanics(
+    step: WorksheetStep, clue: str, name: str, *, chained: bool, feeds_anagram: bool
+) -> Check:
     literal = step.mechanism in ("anagram", "hidden_word", "acrostic", "alternation")
-    if literal and not _in_clue(clue, step.fodder):
+    if literal and not chained and not _in_clue(clue, step.fodder):
         # These mechanisms use clue words verbatim; others may use a synonym.
         return Check(name=name, passed=False, detail="fodder is not words of the clue")
     if step.indicator and not _in_clue(clue, step.indicator):
@@ -90,6 +146,9 @@ def _check_step(step: WorksheetStep, clue: str) -> Check:
         return Check(name=name, passed=ok, detail="letters match" if ok else "letters differ")
     if step.mechanism == "reversal" and fodder[::-1] == produces:
         return Check(name=name, passed=True, detail="fodder reversed")
+    if step.mechanism == "deletion":
+        passed, detail = _check_deletion(step, feeds_anagram)
+        return Check(name=name, passed=passed, detail=detail)
     return Check(name=name, passed=None, detail="can't be checked by code yet")
 
 
@@ -188,10 +247,34 @@ def verify(
         for s in worksheet.wordplay
         if s.mechanism not in ("double_definition", "cryptic_definition")
     ]
-    step_checks = [_check_step(s, clue) for s in steps]
+    # Which earlier step's letters each step works on, if any.
+    letters = [normalize_answer(s.produces) for s in steps]
+    builds_on: list[int | None] = []
+    for s in steps:
+        fodder = normalize_answer(s.fodder)
+        earlier = [j for j in range(len(builds_on)) if letters[j] == fodder and j not in builds_on]
+        builds_on.append(earlier[0] if earlier else None)
+    feeds_anagram = {
+        j
+        for s, j in zip(steps, builds_on, strict=True)
+        if j is not None and s.mechanism == "anagram"
+    }
+    step_checks: list[Check] = []
+    for i, (s, j) in enumerate(zip(steps, builds_on, strict=True)):
+        step_checks.append(
+            _check_step(
+                s,
+                clue,
+                builds_on=step_checks[j] if j is not None else None,
+                feeds_anagram=i in feeds_anagram,
+            )
+        )
     checks.extend(step_checks)
-    if len(steps) == 1 and step_checks[0].passed is not False:
-        built = normalize_answer(steps[0].produces)
+    # The answer is built from the steps nothing later works on.
+    final = [s for i, s in enumerate(steps) if i not in builds_on]
+    final_checks = [c for i, c in enumerate(step_checks) if i not in builds_on]
+    if len(final) == 1 and final_checks[0].passed is not False:
+        built = normalize_answer(final[0].produces)
         checks.append(
             Check(
                 name="wordplay builds the answer",
@@ -199,8 +282,8 @@ def verify(
                 detail=f"{built} vs {answer}",
             )
         )
-    elif len(steps) > 1:
-        joined = "".join(normalize_answer(s.produces) for s in steps)
+    elif len(final) > 1:
+        joined = "".join(normalize_answer(s.produces) for s in final)
         checks.append(
             Check(
                 name="wordplay builds the answer",
@@ -212,8 +295,12 @@ def verify(
         )
 
     roles = [d.text for d in worksheet.definitions] + worksheet.link_words
+    chained = [s for s, j in zip(steps, builds_on, strict=True) if j is not None]
     for s in worksheet.wordplay:
-        roles += [s.fodder] + ([s.indicator] if s.indicator else [])
+        # A step working on an earlier step's letters takes no clue words as fodder.
+        roles += ([] if any(s is c for c in chained) else [s.fodder]) + (
+            [s.indicator] if s.indicator else []
+        )
     # Count words, so a repeated clue word needs a role each time it appears, and no
     # word can serve twice (as definition and fodder, say). An &lit clue is the
     # exception: the whole clue is the definition and also the wordplay.

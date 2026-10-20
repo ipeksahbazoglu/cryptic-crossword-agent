@@ -89,7 +89,9 @@ Use the clue's exact words for definitions, indicators and fodder. List every
 remaining clue word as a link word only if it truly has no other role. confidence:
 "confirmed" only if both the definition and the wordplay independently give the
 answer; "pencilled" if one side is uncertain; "unsure" otherwise. Give runner-up
-answers in alternatives."""
+answers in alternatives. A step can work on an earlier step's letters: give those
+letters as its fodder. For a deletion, the fodder is the word and then the word
+taken out of it ("documentaries aim"); put connecting words in link_words."""
 
 WORKSHEET_PROMPT = "Now fill in the worksheet for your final answer. " + WORKSHEET_GUIDE
 
