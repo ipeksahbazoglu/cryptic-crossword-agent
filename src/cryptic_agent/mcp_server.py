@@ -26,7 +26,7 @@ from mcp.server.stdio import stdio_server
 from pydantic import ValidationError
 
 from cryptic_agent.agent.fastpass import fast_pass
-from cryptic_agent.agent.solver import METHOD, clue_prompt
+from cryptic_agent.agent.solver import METHOD, WORKSHEET_GUIDE, clue_prompt
 from cryptic_agent.agent.tools import Toolbox
 from cryptic_agent.agent.verify import verify
 from cryptic_agent.agent.worksheet import WORKSHEET_SCHEMA, Worksheet
@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 INSTRUCTIONS = """\
 Tools for solving UK cryptic crossword clues. For a clue: call fast_pass first,
 use the other tools to test ideas, then call verify_parse with your full parse.
+Check letter work (anagrams, hidden words, letters taken out) with the tools, not
+by hand.
 Never present an answer as confirmed unless verify_parse returned "confirmed";
 otherwise say it is pencilled in and why."""
 
@@ -105,7 +107,8 @@ def build_server(dictionary: Dictionary, lexicon: Lexicon) -> Server[Any]:
                 "verify_parse",
                 "Finish here. Code checks your full parse: length, real word, definition at "
                 "an end, wordplay mechanics, every word used once. Returns confirmed, "
-                "pencilled or unsure, with each check. Only this can confirm an answer.",
+                "pencilled or unsure, with each check. Only this can confirm an answer. "
+                + WORKSHEET_GUIDE,
                 {
                     "type": "object",
                     "properties": {**CLUE_ARGS, "worksheet": WORKSHEET_SCHEMA},
