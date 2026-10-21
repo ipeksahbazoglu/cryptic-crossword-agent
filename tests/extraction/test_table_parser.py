@@ -269,6 +269,7 @@ def test_table_with_coloured_numbers() -> None:
     assert (esther.number, esther.direction, esther.answer) == (1, "across", "ESTHER")
     assert esther.definitions == ["woman"]
     assert esther.indicators == []  # the blue is styling: it covers every non-definition word
+    assert esther.parsing.startswith("An envelope")  # not the "</color>" after "(6)"
 
 
 def test_a_palindrome_indicator_is_kept_though_nothing_else_is_plain() -> None:

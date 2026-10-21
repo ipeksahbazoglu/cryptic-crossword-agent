@@ -282,7 +282,9 @@ def parse_clue_table(post: RawPost) -> list[ParsedClue]:
             continue
         clue_markup, enumeration, trailing = clue_part
 
-        if trailing:  # early layout: the parsing follows the enumeration in the same cell
+        # Early layout: the parsing follows the enumeration in the same cell. A lone
+        # closing tag there ("(6)</color>") is not a parsing.
+        if strip_markup(trailing):
             parsing = trailing
         elif i + 1 < len(lines) and (nxt := _cells(lines[i + 1])) and not nxt[0]:
             parsing = next((c for c in nxt[1:] if c), "")
